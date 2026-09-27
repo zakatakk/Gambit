@@ -2,7 +2,8 @@
 import { applyTheme, watchSystemTheme } from './theme';
 import { setSoundsEnabled, primeAudio } from './sounds';
 import { getSettings, getProfile } from './db';
-import { el, toast } from './ui';
+import { engine } from './engineClient';
+import { el, modal, toast } from './ui';
 import { mountHome } from './screens/home';
 import { mountPlay } from './screens/play';
 import { mountPuzzles } from './screens/puzzles';
@@ -23,7 +24,7 @@ const TABS = [
   { id: 'play', label: 'Play', ico: '♞' },
   { id: 'puzzles', label: 'Puzzles', ico: '★' },
   { id: 'stats', label: 'Stats', ico: '▲' },
-  { id: 'settings', label: 'Settings', ico: '' },
+  { id: 'settings', label: 'Settings', ico: 'settings' },
 ] as const;
 
 async function render(app: App): Promise<void> {
@@ -52,7 +53,9 @@ export function bootApp(): void {
     const b = el(
       'button',
       { 'data-tab': t.id, onclick: () => { primeAudio(); app.navigate(t.id); } },
-      t.ico ? el('span', { class: 'ico' }, t.ico) : null,
+      t.ico === 'settings'
+        ? settingsIcon()
+        : el('span', { class: 'ico' }, t.ico),
       el('span', {}, t.label)
     );
     nav.appendChild(b);
@@ -86,6 +89,41 @@ export function bootApp(): void {
     watchSystemTheme(() => {
       void getSettings().then((st) => applyTheme(st.theme));
     });
+
+    const engineProgress = el('div', { class: 'progress' }, el('div', {}));
+    const engineStatus = el('p', { class: 'muted' }, 'Checking for the full Stockfish engine…');
+    const closeLoading = modal(
+      el('h2', {}, 'Preparing chess engine…'),
+      engineProgress,
+      engineStatus
+    );
+    try {
+      await engine.init('full', (phase, frac) => {
+        const bar = engineProgress.firstElementChild as HTMLElement | null;
+        if (bar) bar.style.width = `${Math.round(frac * 100)}%`;
+        if (phase === 'download') {
+          engineStatus.textContent = `Downloading full Stockfish engine — ${Math.round(frac * 100)}%. It will work offline afterward.`;
+        } else if (phase === 'booting') {
+          engineStatus.textContent = 'Starting Stockfish…';
+        }
+      });
+      s.engineTier = 'full';
+      await (await import('./db')).saveSettings(s);
+      closeLoading();
+    } catch (error) {
+      closeLoading();
+      toast(`Full engine download failed: ${(error as Error).message}. Lite engine will be used.`);
+      if (s.engineTier === 'full') {
+        s.engineTier = 'lite';
+        await (await import('./db')).saveSettings(s);
+      }
+      try {
+        await engine.init('lite');
+      } catch {
+        toast('Lite engine did not load; check your connection and try Play again.');
+      }
+    }
+
     // First-run nudge
     const p = await getProfile();
     if (!p.assessed) {
@@ -93,6 +131,24 @@ export function bootApp(): void {
     }
     await render(app);
   })();
+}
+
+function settingsIcon(): SVGSVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'ico settings-icon');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Zm9 4.5a7.7 7.7 0 0 0-.1-1.3l1.5-1.2-1.5-2.7-1.8.7a8 8 0 0 0-2.2-1.3L16.6 5h-3.1l-.4 1.9a8 8 0 0 0-2.2 1.3l-1.8-.7-1.5 2.7 1.5 1.2a7.7 7.7 0 0 0 0 2.6l-1.5 1.2 1.5 2.7 1.8-.7a8 8 0 0 0 2.2 1.3l.4 1.9h3.1l.4-1.9a8 8 0 0 0 2.2-1.3l1.8.7 1.5-2.7-1.5-1.2c.1-.4.1-.9.1-1.3Z');
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', 'currentColor');
+  path.setAttribute('stroke-width', '1.8');
+  path.setAttribute('stroke-linecap', 'round');
+  path.setAttribute('stroke-linejoin', 'round');
+  svg.append(path);
+  return svg;
 }
 
 export { el };

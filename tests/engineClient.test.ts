@@ -6,9 +6,11 @@ class MockWorker {
   onerror: ((event: ErrorEvent) => void) | null = null;
   messages: string[] = [];
   terminated = false;
+  onPostMessage: ((message: string) => void) | null = null;
 
   postMessage(message: string): void {
     this.messages.push(message);
+    this.onPostMessage?.(message);
   }
 
   terminate(): void {
@@ -47,9 +49,65 @@ function createClient(): { client: EngineClient; worker: MockWorker } {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe('EngineClient searches', () => {
+  it('shares an in-flight initialization for the same engine tier', async () => {
+    const workers: MockWorker[] = [];
+    class ReadyWorker extends MockWorker {
+      constructor() {
+        super();
+        workers.push(this);
+        this.onPostMessage = (message) => {
+          if (message === 'uci') this.emit('uciok');
+          else if (message === 'isready') {
+            this.emit('Load eval file success: 1');
+            this.emit('info string NNUE evaluation enabled.');
+            this.emit('readyok');
+          }
+        };
+      }
+    }
+    const fetchStub = vi.fn(async (_url: string) => new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchStub);
+    vi.stubGlobal('Worker', ReadyWorker);
+    const client = new EngineClient();
+
+    await Promise.all([client.init('full'), client.init('full')]);
+
+    expect(fetchStub).toHaveBeenCalledTimes(3);
+    expect(fetchStub.mock.calls.map(([url]) => url)).toEqual([
+      expect.stringContaining('stockfish-nnue-16-single.js'),
+      expect.stringContaining('stockfish-nnue-16-single.wasm'),
+      expect.stringContaining('nn-5af11540bbfe.nnue'),
+    ]);
+    expect(workers).toHaveLength(1);
+    expect(workers[0].messages.filter((message) => message === 'uci')).toHaveLength(1);
+    expect(client.tier).toBe('full');
+  });
+
+  it('rejects full initialization when the NNUE network cannot be loaded', async () => {
+    class MissingNetworkWorker extends MockWorker {
+      constructor() {
+        super();
+        this.onPostMessage = (message) => {
+          if (message === 'uci') this.emit('uciok');
+          else if (message === 'isready') {
+            this.emit('Failed to download eval file.');
+            this.emit('readyok');
+          }
+        };
+      }
+    }
+    vi.stubGlobal('fetch', vi.fn(async (_url: string) => new Response(null, { status: 200 })));
+    vi.stubGlobal('Worker', MissingNetworkWorker);
+    const client = new EngineClient();
+
+    await expect(client.init('full')).rejects.toThrow('Stockfish could not load its NNUE network');
+    expect(client.tier).toBeNull();
+  });
+
   it('resolves when Stockfish returns bestmove', async () => {
     const { client, worker } = createClient();
     const analysis = client.analyse('test-fen', 220, () => {});

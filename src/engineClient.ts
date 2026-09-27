@@ -16,20 +16,117 @@ interface InfoLine {
 
 const SEARCH_TIMEOUT_MIN_MS = 5_000;
 const SEARCH_TIMEOUT_GRACE_MS = 1_500;
+const ENGINE_INIT_TIMEOUT_MS = 90_000;
+const FULL_ENGINE_ASSETS = [
+  { file: 'stockfish-nnue-16-single.js', size: 25_594 },
+  { file: 'stockfish-nnue-16-single.wasm', size: 575_029 },
+  { file: 'nn-5af11540bbfe.nnue', size: 40_119_326 },
+] as const;
 
-async function fetchProgress(url: string, onFrac: (f: number) => void): Promise<void> {
+async function fetchProgress(
+  url: string,
+  onFrac: (f: number) => void,
+  expectedBytes?: number
+): Promise<void> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Engine download failed (${res.status})`);
-  const total = Number(res.headers.get('content-length') || 0);
-  if (!res.body || !total) return;
+  const total = expectedBytes ?? Number(res.headers.get('content-length') || 0);
+  if (!res.body) {
+    onFrac(1);
+    return;
+  }
   const reader = res.body.getReader();
   let got = 0;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     got += value.length;
-    onFrac(Math.min(1, got / total));
+    if (total > 0) onFrac(Math.min(1, got / total));
   }
+  onFrac(1);
+}
+
+async function downloadEngineAssets(
+  tier: EngineTier,
+  onProgress?: (phase: string, frac: number) => void
+): Promise<void> {
+  const assets = tier === 'full'
+    ? FULL_ENGINE_ASSETS
+    : [{ file: 'stockfish.js', size: 0 }];
+  const totalBytes = assets.reduce((total, asset) => total + asset.size, 0);
+  let downloadedBytes = 0;
+
+  for (const asset of assets) {
+    await fetchProgress(
+      `${import.meta.env.BASE_URL}engine/${asset.file}`,
+      (frac) => {
+        const done = downloadedBytes + (asset.size ? Math.round(frac * asset.size) : frac);
+        onProgress?.('download', totalBytes ? done / totalBytes : frac);
+      },
+      asset.size || undefined
+    );
+    downloadedBytes += asset.size;
+  }
+}
+
+function isFullEngineReady(worker: Worker, resolve: () => void, reject: (error: Error) => void): (line: string) => void {
+  let isReady = false;
+  let networkLoaded = false;
+  let nnueEnabled = false;
+  let settled = false;
+
+  return (line) => {
+    if (settled) return;
+    if (line === 'uciok') {
+      worker.postMessage('setoption name Use NNUE value true');
+      worker.postMessage('isready');
+    } else if (line === 'Load eval file success: 1') {
+      networkLoaded = true;
+    } else if (line === 'info string NNUE evaluation enabled.') {
+      nnueEnabled = true;
+    } else if (line.startsWith('Failed to download eval file')) {
+      settled = true;
+      reject(new Error('Stockfish could not load its NNUE network'));
+    } else if (line === 'readyok') {
+      isReady = true;
+    }
+
+    if (isReady && networkLoaded && nnueEnabled) {
+      settled = true;
+      resolve();
+    }
+  };
+}
+
+function isLiteEngineReady(worker: Worker, resolve: () => void): (line: string) => void {
+  return (line) => {
+    if (line === 'uciok') worker.postMessage('isready');
+    else if (line === 'readyok') resolve();
+  };
+}
+
+function waitForEngineReady(worker: Worker, tier: EngineTier): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onReady = tier === 'full'
+      ? isFullEngineReady(worker, () => finish(), (error) => finish(error))
+      : isLiteEngineReady(worker, () => finish());
+    const timeout = setTimeout(
+      () => finish(new Error('Engine initialization timed out')),
+      ENGINE_INIT_TIMEOUT_MS
+    );
+
+    worker.onmessage = (event: MessageEvent) => onReady(String(event.data));
+    worker.onerror = (event) => finish(new Error(event.message || 'engine worker failed to boot'));
+    worker.postMessage('uci');
+  });
 }
 
 /** Choose among the engine's MultiPV lines according to desired strength. */
@@ -64,6 +161,7 @@ export function pickMove(lines: InfoLine[], strength: EngineStrengthParams): str
 export class EngineClient {
   private worker: Worker | null = null;
   private currentTier: EngineTier | null = null;
+  private initialization: { tier: EngineTier; promise: Promise<void> } | null = null;
   private lineHandler: ((line: string) => void) | null = null;
   private activeSearchFailure: ((error: Error) => void) | null = null;
 
@@ -73,38 +171,52 @@ export class EngineClient {
 
   async init(tier: EngineTier, onProgress?: (phase: string, frac: number) => void): Promise<void> {
     if (this.worker && this.currentTier === tier) return;
+    if (this.initialization?.tier === tier) {
+      await this.initialization.promise;
+      onProgress?.('ready', 1);
+      return;
+    }
+    if (this.initialization) {
+      await this.initialization.promise.catch(() => {});
+      return this.init(tier, onProgress);
+    }
+
     if (this.activeSearchFailure) this.activeSearchFailure(new Error('Engine tier changed during search'));
     if (this.worker) this.discardWorker(this.worker);
+
+    const promise = this.initializeWorker(tier, onProgress);
+    this.initialization = { tier, promise };
+    try {
+      await promise;
+    } finally {
+      if (this.initialization?.promise === promise) this.initialization = null;
+    }
+  }
+
+  private async initializeWorker(tier: EngineTier, onProgress?: (phase: string, frac: number) => void): Promise<void> {
     const file = tier === 'full' ? 'stockfish-nnue-16-single.js' : 'stockfish.js';
     // Resolves under the deploy base (works at / and /repo/ on GitHub Pages).
     // Plain path concat (NOT new URL + import.meta.url): Vite rewrites that
     // pattern into a static asset import, which breaks the dynamic tier switch.
     const engineUrl = `${import.meta.env.BASE_URL}engine/${file}`;
 
-    // Warm the HTTP/SW cache with real progress, then boot the worker from cache.
+    // Warm the HTTP/SW cache for the JS, WASM and (for full) NNUE network.
+    // The engine's own worker fetches those files again from this cache at boot.
     onProgress?.('download', 0);
-    await fetchProgress(engineUrl, (f) => onProgress?.('download', f));
+    await downloadEngineAssets(tier, onProgress);
     onProgress?.('booting', 1);
 
-    this.worker = new Worker(engineUrl);
-    await new Promise<void>((resolve, reject) => {
-      const w = this.worker!;
-      w.onmessage = (ev: MessageEvent) => {
-        const line = String(ev.data);
-        if (line === 'uciok') {
-          w.postMessage('isready');
-        } else if (line === 'readyok') {
-          resolve();
-        }
-      };
-      w.onerror = (e) => {
-        this.discardWorker(w);
-        reject(new Error(e.message || 'engine worker failed to boot'));
-      };
-      w.postMessage('uci');
-    });
-    const worker = this.worker;
-    if (!worker) throw new Error('Engine worker failed to boot');
+    const worker = new Worker(engineUrl);
+    this.worker = worker;
+    try {
+      await waitForEngineReady(worker, tier);
+    } catch (error) {
+      this.discardWorker(worker);
+      throw error;
+    }
+
+    if (this.worker !== worker) throw new Error('Engine worker was superseded during initialization');
+
     worker.onmessage = (ev: MessageEvent) => {
       this.lineHandler?.(String(ev.data));
     };

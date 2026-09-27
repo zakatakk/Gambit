@@ -45,6 +45,7 @@ function shuffle<T>(arr: T[]): T[] {
 
 export async function mountPlay(container: HTMLElement, app: App, params: PlayParams): Promise<void> {
   const settings = await getSettings();
+  const selectedEngineTier = settings.engineTier === 'full' ? 'full' : 'lite';
   const game = new Chess();
 
   // ---------- state ----------
@@ -224,7 +225,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
 
   // ---------- engine helpers ----------
   async function ensureEngine(onStatus: (s: string) => void): Promise<void> {
-    await engine.init(settings.engineTier, (phase, frac) => {
+    await engine.init(selectedEngineTier, (phase, frac) => {
       if (phase === 'download') onStatus(`Downloading engine ${Math.round(frac * 100)}%`);
       else onStatus('Booting engine…');
     });

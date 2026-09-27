@@ -206,6 +206,11 @@ nav.tabs button {
   border-radius: 0;
 }
 nav.tabs button .ico { margin-right: 2px; }
+nav.tabs button .settings-icon {
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.15em;
+}
 nav.tabs button.active { color: var(--accent); border-top-color: var(--accent); }
 nav.tabs button:active { color: var(--ink); }
 
