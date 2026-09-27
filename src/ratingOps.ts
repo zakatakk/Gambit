@@ -5,6 +5,7 @@
 import { rate } from './glicko2';
 import { addHistory, getProfile, saveProfile } from './db';
 import type { GameResult, PuzzleItem } from './types';
+import type { PuzzleScore } from './puzzleScoring';
 
 /** Assessment opponents use a fixed nominal RD of 150 (moderately certain). */
 const OPP_RD = 150;
@@ -50,7 +51,7 @@ export async function applyGameResult(opts: {
 
 export async function applyPuzzleResult(
   puzzle: PuzzleItem,
-  won: boolean
+  score: PuzzleScore
 ): Promise<{ before: number; after: number; rd: number }> {
   const profile = await getProfile();
   const next = rate(
@@ -60,7 +61,7 @@ export async function applyPuzzleResult(
       volatility: profile.volatility,
       lastPlayed: profile.lastPlayed || Date.now() - 8 * 86_400_000,
     },
-    [{ oppRating: puzzle.rating, oppRd: Math.max(60, puzzle.rd), score: won ? 1 : 0 }],
+    [{ oppRating: puzzle.rating, oppRd: Math.max(60, puzzle.rd), score }],
     Date.now()
   );
   const before = profile.rating;

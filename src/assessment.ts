@@ -8,10 +8,13 @@
  * that otherwise drags an all-losses run far below its true level.
  */
 import { ASSESSMENT_LEVELS } from './engineStrength';
+import type { PuzzleScore } from './puzzleScoring';
 import type { PuzzleItem } from './types';
 
 export interface AssessmentPuzzle extends PuzzleItem {
   won?: boolean;
+  score?: PuzzleScore;
+  mistakes?: number;
 }
 
 export interface AssessmentGame {
@@ -77,14 +80,13 @@ export const LADDER_DEFAULT_PRIOR = { rating: 1200, rd: 300 };
 export function priorFromPuzzles(puzzles: AssessmentPuzzle[]): { rating: number; rd: number } {
   const done = puzzles.filter((p) => p.won !== undefined);
   if (done.length === 0) return { rating: 1200, rd: 260 };
-  if (done.length >= 8 && done.every((p) => p.won)) {
+  if (done.length >= 8 && done.every((p) => p.won && (p.score ?? 1) === 1)) {
     // Perfect probe: start higher; the games will correct from there.
     return { rating: 1600, rd: 260 };
   }
   const sorted = done.map((p) => p.rating).sort((a, b) => a - b);
   const median = sorted[Math.floor(sorted.length / 2)];
-  const wins = done.filter((p) => p.won).length;
-  const ratio = wins / done.length;
+  const ratio = done.reduce((sum, p) => sum + Math.max(0, Math.min(1, p.score ?? (p.won ? 1 : 0))), 0) / done.length;
   const adj = (ratio - 0.5) * 500;
   return { rating: Math.max(600, Math.min(2200, median + adj)), rd: 260 };
 }

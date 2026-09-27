@@ -42,6 +42,8 @@ export interface PuzzleAttempt {
   won: boolean;
   rating: number;
   ts: number;
+  score?: number;
+  mistakes?: number;
 }
 
 export interface PuzzleItem {
