@@ -30,7 +30,7 @@ export async function mountPuzzles(container: HTMLElement, _app: App): Promise<v
   });
   const boardHost = el('div', { class: 'board-wrap' }, board.el);
 
-  const header = el('div', { class: 'hero', style: 'padding: 20px 18px 14px' },
+  const header = el('div', { class: 'hero puzzle-hero' },
     el('div', { class: 'brand' },
       el('h1', {}, 'Puzzles'),
       el('span', { class: 'est' }, `${attempts.filter((a) => a.won).length} SOLVED`))

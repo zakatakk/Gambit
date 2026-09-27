@@ -50,7 +50,7 @@ function renderReview(rec: GameRecord, review: DeepReview): void {
   const content = el('div', { class: 'review' });
 
   // ---- Replay board (hidden until a ply is selected) ----
-  const replayHost = el('div');
+  const replayHost = el('div', { class: 'board-wrap' });
   const replayGame = new Chess(rec.startFen);
   const board = new Board(replayHost, replayGame, {
     orientation: rec.color,

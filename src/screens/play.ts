@@ -54,7 +54,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   let lastResult: 'win' | 'loss' | 'draw' = 'draw';
 
   // ---------- DOM ----------
-  const boardHost = el('div');
+  const boardHost = el('div', { class: 'board-wrap' });
   const opponentLabel = el('span', {}, 'CPU');
   const modeLabel = el('span', { class: 'sub' }, ' · casual');
   const topBar = el('div', { class: 'game-top' },
