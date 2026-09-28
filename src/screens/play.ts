@@ -5,7 +5,7 @@ import { engine } from '../engineClient';
 import { ratingToStrength, ASSESSMENT_LEVELS } from '../engineStrength';
 import { applyGameResult, setProfileRating } from '../ratingOps';
 import { ratePeriod } from '../glicko2';
-import { getProfile, getSettings, updateSettings, addGame, updateGame, updateProfile } from '../db';
+import { getProfile, getSettings, updateSettings, addGame, updateGame, updateProfile, getSavedAssessment, saveSavedAssessment } from '../db';
 import { play } from '../sounds';
 import { el, modal, toast } from '../ui';
 import type { App } from '../app';
@@ -15,8 +15,11 @@ import {
   priorFromPuzzles,
   nextLevel,
   assessmentDone,
+  serializeAssessment,
+  deserializeAssessment,
   LADDER_DEFAULT_PRIOR,
   type AssessmentState,
+  type SavedAssessment,
 } from '../assessment';
 import type { AssessmentPuzzle } from '../assessment';
 import { loadPuzzles } from '../puzzles';
@@ -86,6 +89,118 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   };
   container.addEventListener('screen-dispose', dispose, { once: true });
 
+  /** Save or clear the assessment snapshot between sessions. */
+  function persistAssessment(state: AssessmentState | null): Promise<void> {
+    return saveSavedAssessment(state ? serializeAssessment(state) : null).catch(() => {});
+  }
+
+  function persistAssessmentNow(state: AssessmentState): void {
+    void persistAssessment(state);
+  }
+
+  function clearPersistedAssessment(): void {
+    void saveSavedAssessment(null).catch(() => {});
+  }
+
+  /** Resume an unfinished assessment, or show why it cannot be resumed. */
+  function restoreAssessment(): void {
+    void getSavedAssessment()
+      .then((raw) => {
+        if (!container.isConnected || mode !== 'idle') return;
+        if (controls.dataset.resumable === '1') return;
+        const state = deserializeAssessment(raw as SavedAssessment | null);
+        if (!state || state.games.length === 0 && state.puzzles.every((p) => p.won === undefined)) {
+          if (state) clearPersistedAssessment();
+          return;
+        }
+        controls.dataset.resumable = '1';
+        assess = state;
+        // A restored probe continues in its ladder phase; quick runs as ladder.
+        mode = 'ladder';
+        lastLevel = state.currentLevel;
+        const gamesLabel = state.games.length === 1 ? '1 game' : `${state.games.length} games`;
+        if (state.puzzles.some((p) => p.won === undefined)) {
+          resumeProbeAssessment(state, gamesLabel);
+          return;
+        }
+        resumeLadderAssessment(state, gamesLabel);
+      })
+      .catch(() => {});
+  }
+
+  /** Resume a probe assessment by replaying solved puzzles, then continue the run. */
+  function resumeProbeAssessment(saved: AssessmentState, gamesLabel: string): void {
+    const note = el('p', { class: 'tiny', style: 'margin:6px 0 0' },
+      `Unfinished assessment in progress (${gamesLabel} played).`);
+    const resume = () => {
+      void (async () => {
+        // Snapshots store puzzle ids only; reattach positions from the bundle.
+        const all = await loadPuzzles().catch(() => [] as PuzzleItem[]);
+        if (!container.isConnected) return;
+        if (all.length === 0) {
+          toast('Puzzle bundle missing — run: npm run puzzles');
+          return;
+        }
+        const byId = new Map(all.map((item) => [item.id, item]));
+        const rebuilt: AssessmentPuzzle[] = [];
+        for (const puzzle of saved.puzzles) {
+          const item = byId.get(puzzle.id);
+          if (!item) {
+            clearPersistedAssessment();
+            return;
+          }
+          rebuilt.push({ ...item, won: puzzle.won, score: puzzle.score, mistakes: puzzle.mistakes });
+        }
+        clearResumableControls();
+        assess = { ...saved, puzzles: rebuilt };
+        mode = 'probe';
+        const firstUnfinished = rebuilt.findIndex((p) => p.won === undefined);
+        if (firstUnfinished === -1) {
+          finishProbeToLadder();
+          return;
+        }
+        probeIndex = firstUnfinished;
+        loadProbe(firstUnfinished);
+      })();
+    };
+    controls.append(
+      note,
+      el('div', { class: 'btn-row', style: 'margin-top:8px' },
+        el('button', { class: 'primary', onclick: resume }, 'Resume assessment')),
+      el('p', { class: 'tiny', style: 'margin:6px 0 0' },
+        'Solved puzzles are kept; you will not repeat them.'));
+  }
+
+  /** Resume a ladder run directly into its next engine game. */
+  function resumeLadderAssessment(_saved: AssessmentState, gamesLabel: string): void {
+    const note = el('p', { class: 'tiny', style: 'margin:6px 0 0' },
+      `Unfinished assessment in progress (${gamesLabel} played).`);
+    controls.append(
+      note,
+      el('div', { class: 'btn-row', style: 'margin-top:8px' },
+        el('button', { class: 'primary', onclick: () => { clearResumableControls(); resumeLadderRun(); } }, 'Resume assessment')),
+      el('p', { class: 'tiny', style: 'margin:6px 0 0' },
+        'Your in-run rating is kept and the ladder continues from where it left off.'));
+  }
+
+  /** Continue a restored ladder/quick run with its next engine game. */
+  function resumeLadderRun(): void {
+    if (!assess.prior) return;
+    lastLevel = assess.currentLevel;
+    mode = 'idle';
+    const prior = assess.prior;
+    void (async () => {
+      const profile = await getProfile();
+      // After a reload the stored profile already carries this run's progress.
+      if (Math.round(profile.rating) !== Math.round(prior.rating)) {
+        void startGame({ ladder: true, rating: ASSESSMENT_LEVELS[lastLevel].rating });
+        return;
+      }
+      await setProfileRating(prior.rating, prior.rd);
+      void startGame({ ladder: true, rating: ASSESSMENT_LEVELS[lastLevel].rating });
+    })();
+  }
+
   function scheduleProbe(callback: () => void, delay: number): void {
     if (probeTimeout !== undefined) clearTimeout(probeTimeout);
     probeTimeout = setTimeout(() => {
@@ -151,6 +266,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
           el('span', { class: 'muted' }, 'Moves'), el('span', {}, '')),
         moveList
       );
+      controlsResumable();
       return;
     }
     // Unrated: offer the three assessment modes.
@@ -168,6 +284,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
         el('span', { class: 'muted' }, 'Moves'), el('span', {}, '')),
       moveList
     );
+    controlsResumable();
   }
 
   function controlsInGame(allowHelpers: boolean): void {
@@ -224,6 +341,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     activeProbe.puzzle.score = score;
     activeProbe.puzzle.mistakes = activeProbe.mistakes;
     activeProbe.puzzle.won = score > 0;
+    persistAssessmentNow(assess);
     board.setInteractive(false);
     if (score === 0) {
       setStatus(activeProbe.solutionShown ? `Solution: ${puzzleSolutionSan(activeProbe.puzzle.fen, activeProbe.puzzle.moves)}` : 'Three tries used — no credit.', 'lose');
@@ -247,6 +365,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     activeProbe.puzzle.won = false;
     activeProbe.complete = true;
     activeProbe.solutionShown = false;
+    persistAssessmentNow(assess);
 
     board.setInteractive(false);
     displayProbeSolution(activeProbe);
@@ -532,9 +651,14 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   }
 
   async function startAssessment(chosenMode: 'probe' | 'ladder' | 'quick' = 'probe'): Promise<void> {
+    if (container.isConnected && controls.dataset.resumable === '1') {
+      const proceed = confirm('Start a new assessment? The unfinished one will be discarded.');
+      if (!proceed) return;
+    }
     const generation = ++probeGeneration;
     ladderGeneration++;
     assess = newAssessment(chosenMode);
+    clearPersistedAssessment();
     if (chosenMode !== 'probe') mode = 'idle';
     if (chosenMode === 'probe') {
       mode = 'probe';
@@ -560,6 +684,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     // ladder / quick: straight to games from the default prior.
     const prior = { ...LADDER_DEFAULT_PRIOR };
     assess.prior = prior;
+    persistAssessmentNow(assess);
     await setProfileRating(prior.rating, prior.rd);
     if (generation !== probeGeneration || !container.isConnected) return;
     lastLevel = levelForRating(prior.rating);
@@ -570,6 +695,31 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   }
 
   let probeIndex = 0;
+
+  function controlsResumable(): void {
+    void getSavedAssessment()
+      .then((raw) => {
+        if (!container.isConnected || mode !== 'idle' || controls.dataset.resumable === '1') return;
+        const state = deserializeAssessment(raw as SavedAssessment | null);
+        if (!state) return;
+        if (state.games.length === 0 && state.puzzles.every((p) => p.won === undefined)) {
+          clearPersistedAssessment();
+          return;
+        }
+        controls.dataset.resumable = '1';
+        const gamesLabel = state.games.length === 1 ? '1 game' : `${state.games.length} games`;
+        if (state.puzzles.some((p) => p.won === undefined)) {
+          resumeProbeAssessment(state, gamesLabel);
+        } else {
+          resumeLadderAssessment(state, gamesLabel);
+        }
+      })
+      .catch(() => {});
+  }
+
+  function clearResumableControls(): void {
+    delete controls.dataset.resumable;
+  }
 
   function loadProbe(i: number): void {
     probeIndex = i;
@@ -677,15 +827,20 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       loadProbe(nextI);
       return;
     }
-    // Probe complete → seed rating and start ladder
+    finishProbeToLadder();
+  }
+
+  /** Probe finished: seed the rating from puzzle results and start the ladder. */
+  function finishProbeToLadder(): void {
     const prior = priorFromPuzzles(assess.puzzles);
     assess.prior = prior;
+    lastLevel = levelForRating(prior.rating);
+    assess.currentLevel = lastLevel;
+    persistAssessmentNow(assess);
     const generation = ++probeGeneration;
     void (async () => {
       await setProfileRating(prior.rating, prior.rd);
       if (generation !== probeGeneration || !container.isConnected) return;
-      lastLevel = levelForRating(prior.rating);
-      assess.currentLevel = lastLevel;
       toast(`Probe done — starting games from ${Math.round(prior.rating)}.`);
       void startGame({ ladder: true, rating: ASSESSMENT_LEVELS[lastLevel].rating, color: 'w' });
     })();
@@ -729,6 +884,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       const clamped = Math.max(600, Math.min(2900, batched.rating));
       await setProfileRating(clamped, Math.min(200, batched.rd), 'assessment');
       if (generation !== ladderGeneration || !container.isConnected) return;
+      persistAssessmentNow(assess);
       const p = await getProfile();
       if (generation !== ladderGeneration || !container.isConnected) return;
       if (assessmentDone(assess, p.rd)) {
@@ -747,6 +903,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     if (generation !== ladderGeneration || !container.isConnected) return;
     assessed = true;
     mode = 'idle';
+    clearPersistedAssessment();
     const closeSheet = modal(
       el('h2', {}, 'Assessment complete'),
       el('p', {}, 'Your rating: ', el('b', { class: 'rating-big' }, String(Math.round(prof.rating))),
@@ -768,5 +925,6 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   } else {
     controlsDefault();
     board.render();
+    restoreAssessment();
   }
 }

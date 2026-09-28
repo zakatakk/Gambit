@@ -1,5 +1,5 @@
 /** Settings: preferences, engine tier, difficulty override, and data management. */
-import { getSettings, updateSettings, getProfile, updateProfile, exportData, importData, clearAll } from '../db';
+import { getSettings, updateSettings, getProfile, updateProfile, exportData, importData, clearAll, getSavedAssessment } from '../db';
 import { engine } from '../engineClient';
 import { applyTheme } from '../theme';
 import { setSoundsEnabled, play } from '../sounds';
@@ -169,6 +169,8 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
   function doReassess(mode: 'probe' | 'ladder' | 'quick'): void {
     void (async () => {
       try {
+        const saved = await getSavedAssessment().catch(() => null);
+        if (saved && !confirm('Start a new assessment? Unfinished assessment progress will be discarded.')) return;
         await updateProfile({ assessed: false });
         if (!container.isConnected) return;
         toast(mode === 'quick' ? 'Quick scan starting…' : 'Fresh assessment starting…');

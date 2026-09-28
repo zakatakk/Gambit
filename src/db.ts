@@ -276,6 +276,15 @@ export async function clearAll(): Promise<void> {
   });
 }
 
+/** Persist the in-progress assessment snapshot (null clears it). */
+export async function saveSavedAssessment(state: unknown): Promise<void> {
+  await requestTransaction('kv', 'readwrite', (store) => store.put(state, 'assessment'));
+}
+
+export async function getSavedAssessment(): Promise<unknown | null> {
+  return requestTransaction<unknown>('kv', 'readonly', (store) => store.get('assessment'));
+}
+
 /** Export a JSON backup of everything stored by the app. */
 export async function exportData(): Promise<string> {
   const [profile, settings, games, history, attempts, reviews] = await Promise.all([

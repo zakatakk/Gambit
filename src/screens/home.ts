@@ -1,5 +1,5 @@
 /** Home: rating overview, assessment entry, engine download. */
-import { getProfile, getSettings, countGames, getAttempts, updateSettings } from '../db';
+import { getProfile, getSettings, countGames, getAttempts, updateSettings, getSavedAssessment } from '../db';
 import { engine } from '../engineClient';
 import { el, modal, toast } from '../ui';
 import { play } from '../sounds';
@@ -13,6 +13,9 @@ export async function mountHome(container: HTMLElement, app: App): Promise<void>
     getAttempts(),
   ]);
   if (!container.isConnected) return;
+
+  const savedAssessment = await getSavedAssessment().catch(() => null);
+  const hasSaved = Boolean(savedAssessment) && !profile.assessed;
 
   const hero = el('div', { class: 'hero' },
     el('div', { class: 'brand' }, el('h1', {}, 'Gambit')),
@@ -39,9 +42,9 @@ export async function mountHome(container: HTMLElement, app: App): Promise<void>
           el('button', { class: 'primary', onclick: () => app.navigate('play', { rematch: true }) }, 'Play vs CPU'),
           el('button', { onclick: () => app.navigate('puzzles') }, 'Puzzles'))
       : el('div', {},
-          modeTile('Puzzles + games', 'recommended · ~15 min', () => startAssessment(app, 'probe')),
-          modeTile('Full ladder', '~10-14 games', () => startAssessment(app, 'ladder')),
-          modeTile('Quick scan', '6 games · rough', () => startAssessment(app, 'quick'))
+          modeTile('Puzzles + games', hasSaved ? 'resume · saved progress' : 'recommended · ~15 min', () => startAssessment(app, 'probe')),
+          modeTile('Full ladder', hasSaved ? 'resume · saved progress' : '~10-14 games', () => startAssessment(app, 'ladder')),
+          modeTile('Quick scan', hasSaved ? 'resume · saved progress' : '6 games · rough', () => startAssessment(app, 'quick'))
       )
   );
   const about = el('div', { class: 'section' },

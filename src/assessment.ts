@@ -84,3 +84,88 @@ export function assessmentDone(state: AssessmentState, rd: number): boolean {
   const cap = state.mode === 'ladder' ? 14 : 12;
   return state.games.length >= cap || (state.games.length >= 8 && rd < 150);
 }
+
+/** Saved-assessment snapshot format. Bump the version whenever the shape changes. */
+const SAVED_ASSESSMENT_VERSION = 1;
+
+export interface SavedAssessment {
+  version: typeof SAVED_ASSESSMENT_VERSION;
+  mode: AssessmentMode;
+  prior: { rating: number; rd: number } | null;
+  currentLevel: number;
+  puzzles: { id: string; won?: boolean; score?: number; mistakes?: number }[];
+  games: AssessmentGame[];
+  matches: AssessmentMatch[];
+}
+
+const PUZZLE_SCORES = [0, 0.5, 0.75, 1];
+
+const BLANK_PUZZLE: PuzzleItem = {
+  id: '', fen: '', moves: [], rating: 0, rd: 0, popularity: 0, themes: [],
+};
+
+/** Snapshot an in-progress assessment for storage between sessions. */
+export function serializeAssessment(state: AssessmentState): SavedAssessment {
+  return {
+    version: SAVED_ASSESSMENT_VERSION,
+    mode: state.mode,
+    prior: state.prior ? { ...state.prior } : null,
+    currentLevel: state.currentLevel,
+    puzzles: state.puzzles.map((puzzle) => ({
+      id: puzzle.id,
+      won: puzzle.won,
+      score: puzzle.score,
+      mistakes: puzzle.mistakes,
+    })),
+    games: state.games.map((game) => ({ ...game })),
+    matches: state.matches.map((match) => ({ ...match })),
+  };
+}
+
+/** Restore a saved assessment; returns null for unknown, incomplete, or corrupt snapshots. */
+export function deserializeAssessment(raw: SavedAssessment | null | undefined): AssessmentState | null {
+  if (!raw || typeof raw !== 'object') return null;
+  if (raw.version !== SAVED_ASSESSMENT_VERSION) return null;
+  if (raw.mode !== 'probe' && raw.mode !== 'ladder' && raw.mode !== 'quick') return null;
+
+  const state = newAssessment(raw.mode);
+  if (raw.prior !== null) {
+    const prior = raw.prior as { rating?: unknown; rd?: unknown } | null;
+    if (!prior || !Number.isFinite(prior.rating) || !Number.isFinite(prior.rd)) return null;
+    state.prior = { rating: prior.rating as number, rd: prior.rd as number };
+  }
+  if (Number.isInteger(raw.currentLevel) && raw.currentLevel >= 0 && raw.currentLevel < ASSESSMENT_LEVELS.length) {
+    state.currentLevel = raw.currentLevel;
+  }
+
+  if (raw.puzzles !== undefined) {
+    if (!Array.isArray(raw.puzzles)) return null;
+    for (const entry of raw.puzzles) {
+      if (!entry || typeof entry.id !== 'string') return null;
+      const puzzle: AssessmentPuzzle = { ...BLANK_PUZZLE, id: entry.id };
+      if (typeof entry.won === 'boolean') puzzle.won = entry.won;
+      if (typeof entry.score === 'number' && PUZZLE_SCORES.includes(entry.score)) {
+        puzzle.score = entry.score as PuzzleScore;
+      }
+      if (Number.isInteger(entry.mistakes) && (entry.mistakes as number) >= 0) puzzle.mistakes = entry.mistakes;
+      state.puzzles.push(puzzle);
+    }
+  }
+
+  if (raw.games !== undefined) {
+    if (!Array.isArray(raw.games)) return null;
+    for (const game of raw.games) {
+      if (!game || !Number.isInteger(game.level) || !['win', 'loss', 'draw'].includes(game.result)) return null;
+      state.games.push({ level: game.level, result: game.result });
+    }
+  }
+
+  if (raw.matches !== undefined) {
+    if (!Array.isArray(raw.matches)) return null;
+    for (const match of raw.matches) {
+      if (!match || !Number.isFinite(match.oppRating) || ![0, 0.5, 1].includes(match.score)) return null;
+      state.matches.push({ oppRating: match.oppRating, score: match.score as 0 | 0.5 | 1 });
+    }
+  }
+  return state;
+}
