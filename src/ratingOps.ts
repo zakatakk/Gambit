@@ -1,82 +1,95 @@
-/**
- * Rating side-effects: apply a game or puzzle result to the profile via Glicko-2,
- * record history, and keep the DB in sync.
- */
+/** Rating side-effects: update profile and history together through Glicko-2. */
 import { rate } from './glicko2';
-import { addHistory, getProfile, saveProfile } from './db';
-import type { GameResult, PuzzleItem } from './types';
+import { getProfile, saveProfileAndHistory, savePuzzleRatingResult } from './db';
+import type { GameResult, Profile, PuzzleAttempt, PuzzleItem, RatingHistoryPoint } from './types';
 import type { PuzzleScore } from './puzzleScoring';
 
-/** Assessment opponents use a fixed nominal RD of 150 (moderately certain). */
-const OPP_RD = 150;
+const GAME_OPPONENT_RD = 150;
+let ratingWrite = Promise.resolve();
+let lastHistoryTimestamp = 0;
 
-function applyToProfile(
-  profile: Awaited<ReturnType<typeof getProfile>>,
-  next: { rating: number; rd: number; volatility: number; lastPlayed: number }
-): void {
+function serializeRatingWrite<T>(write: () => Promise<T>): Promise<T> {
+  const result = ratingWrite.then(write);
+  ratingWrite = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+function nextTimestamp(after = 0): number {
+  lastHistoryTimestamp = Math.max(Date.now(), lastHistoryTimestamp + 1, after + 1);
+  return lastHistoryTimestamp;
+}
+
+function applyToProfile(profile: Profile, next: Profile): void {
   profile.rating = next.rating;
   profile.rd = next.rd;
   profile.volatility = next.volatility;
   profile.lastPlayed = next.lastPlayed;
 }
 
-export async function applyGameResult(opts: {
+async function saveRatedResult(
+  profile: Profile,
+  next: Omit<Profile, 'assessed'>,
+  kind: RatingHistoryPoint['kind'],
+  ts: number,
+  attempt?: PuzzleAttempt
+): Promise<void> {
+  applyToProfile(profile, { ...next, assessed: profile.assessed });
+  const point = { ts, rating: next.rating, rd: next.rd, kind };
+  if (attempt) await savePuzzleRatingResult(profile, point, attempt);
+  else await saveProfileAndHistory(profile, point);
+}
+
+export function applyGameResult(opts: {
   oppRating: number;
   result: GameResult;
   kind: 'assessment' | 'game';
 }): Promise<{ before: number; after: number; rd: number }> {
-  const profile = await getProfile();
-  const score: 0 | 0.5 | 1 = opts.result === 'win' ? 1 : opts.result === 'draw' ? 0.5 : 0;
-  const next = rate(
-    {
+  return serializeRatingWrite(async () => {
+    const profile = await getProfile();
+    const score = opts.result === 'win' ? 1 : opts.result === 'draw' ? 0.5 : 0;
+    const ts = nextTimestamp(profile.lastPlayed);
+    const next = rate({
       rating: profile.rating,
       rd: profile.rd,
       volatility: profile.volatility,
-      lastPlayed: profile.lastPlayed || Date.now() - 8 * 86_400_000,
-    },
-    [{ oppRating: opts.oppRating, oppRd: OPP_RD, score }],
-    Date.now()
-  );
-  const before = profile.rating;
-  applyToProfile(profile, next);
-  await saveProfile(profile);
-  await addHistory({
-    ts: Date.now(),
-    rating: next.rating,
-    rd: next.rd,
-    kind: opts.kind,
+      lastPlayed: profile.lastPlayed || ts - 8 * 86_400_000,
+    }, [{ oppRating: opts.oppRating, oppRd: GAME_OPPONENT_RD, score }], ts);
+    const before = profile.rating;
+    await saveRatedResult(profile, next, opts.kind, ts);
+    return { before, after: next.rating, rd: next.rd };
   });
-  return { before, after: next.rating, rd: next.rd };
 }
 
-export async function applyPuzzleResult(
+export function applyPuzzleResult(
   puzzle: PuzzleItem,
-  score: PuzzleScore
+  score: PuzzleScore,
+  attempt: PuzzleAttempt
 ): Promise<{ before: number; after: number; rd: number }> {
-  const profile = await getProfile();
-  const next = rate(
-    {
+  return serializeRatingWrite(async () => {
+    const profile = await getProfile();
+    const ts = nextTimestamp(profile.lastPlayed);
+    const next = rate({
       rating: profile.rating,
       rd: profile.rd,
       volatility: profile.volatility,
-      lastPlayed: profile.lastPlayed || Date.now() - 8 * 86_400_000,
-    },
-    [{ oppRating: puzzle.rating, oppRd: Math.max(60, puzzle.rd), score }],
-    Date.now()
-  );
-  const before = profile.rating;
-  applyToProfile(profile, next);
-  await saveProfile(profile);
-  await addHistory({ ts: Date.now(), rating: next.rating, rd: next.rd, kind: 'puzzle' });
-  return { before, after: next.rating, rd: next.rd };
+      lastPlayed: profile.lastPlayed || ts - 8 * 86_400_000,
+    }, [{ oppRating: puzzle.rating, oppRd: Math.max(60, puzzle.rd), score }], ts);
+    const before = profile.rating;
+    await saveRatedResult(profile, next, 'puzzle', ts, attempt);
+    return { before, after: next.rating, rd: next.rd };
+  });
 }
 
-/** Seed/overwrite the rating (assessment probe prior, manual override). */
-export async function setProfileRating(rating: number, rd: number): Promise<void> {
-  const profile = await getProfile();
-  profile.rating = rating;
-  profile.rd = rd;
-  profile.lastPlayed = Date.now();
-  await saveProfile(profile);
-  await addHistory({ ts: Date.now(), rating, rd, kind: 'seed' });
+/** Seed or overwrite the rating (assessment probe prior or manual override). */
+export function setProfileRating(
+  rating: number,
+  rd: number,
+  kind: RatingHistoryPoint['kind'] = 'seed'
+): Promise<void> {
+  return serializeRatingWrite(async () => {
+    const profile = await getProfile();
+    const ts = nextTimestamp(profile.lastPlayed);
+    const next = { ...profile, rating, rd, lastPlayed: ts };
+    await saveRatedResult(profile, next, kind, ts);
+  });
 }

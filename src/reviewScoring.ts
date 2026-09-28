@@ -1,119 +1,140 @@
-/**
- * Review scoring: win-probability model + move classification + accuracy.
- * Win% model is the Lichess-style logistic: winPct(cp) = 50 + 50*(2/(1+e^(-0.00368208*cp))-1).
- * Raw centipawn loss misleads in decided positions (±3 pawns up barely matters);
- * win% drop scales severity with the real stakes, which is what teaches.
- */
+/** Win-probability move scoring, classifications, and game accuracy. */
 
 export type MoveCls = 'book' | 'best' | 'good' | 'inaccuracy' | 'mistake' | 'blunder';
 
-/** White's expected score (0-100) from a white-POV centipawn eval. */
+/** White's expected score (0-100) from a white-perspective centipawn evaluation. */
 export function winPct(cpWhitePov: number): number {
   const v = 2 / (1 + Math.exp(-0.00368208 * cpWhitePov)) - 1;
   return 50 + 50 * v;
 }
 
-/** Win% from mate distance; sign from mover's POV converted to white POV via isWhite. */
-export function mateWinPct(mate: number, whitePov: boolean): number {
-  const inN = Math.abs(mate);
-  // Mate in 1 ≈ 99.5, tapering to ~85 at mate in 15+.
-  const pct = Math.max(85, 99.5 - (inN - 1) * 1.0);
-  return (mate > 0) === whitePov ? pct : 100 - pct;
+/** Result points for a mate value expressed as winning-side plies to mate. */
+export function mateScoreValue(mate: number): number {
+  const percent = Math.max(85, 99.5 - (Math.abs(mate) - 1));
+  return mate > 0 ? percent : 100 - percent;
 }
 
 export interface MoveEval {
-  /** white-POV eval before the move (cp or mate) */
   before: { cp: number | null; mate: number | null };
-  /** white-POV eval after the move (opponent to move) */
   after: { cp: number | null; mate: number | null };
-  /** best line's eval before the move (white POV) */
   best: { cp: number | null; mate: number | null };
 }
 
-function toWinPct(e: { cp: number | null; mate: number | null }, whitePov: boolean): number {
-  if (e.mate !== null) return mateWinPct(e.mate, whitePov);
-  return winPct(e.cp ?? 0);
+function scoreWinPercent(score: MoveEval['before']): number {
+  if (score.mate !== null) return mateScoreValue(score.mate);
+  return winPct(score.cp ?? 0);
 }
 
-/** Win% the mover gave up vs best play, 0-100 (mover POV). */
-export function winDrop(m: MoveEval, moverIsWhite: boolean): number {
-  const beforeBest = toWinPct(m.best, true);
-  const after = toWinPct(m.after, true);
-  const before = moverIsWhite ? beforeBest : 100 - beforeBest;
-  const afterPov = moverIsWhite ? after : 100 - after;
-  return Math.max(0, before - afterPov);
+/** Win percentage the mover gave up versus best play, from the mover's perspective. */
+export function winDrop(move: MoveEval, moverIsWhite: boolean): number {
+  const before = scoreWinPercent(move.best);
+  const after = scoreWinPercent(move.after);
+  return Math.max(0, (moverIsWhite ? before : 100 - before) - (moverIsWhite ? after : 100 - after));
 }
 
 export interface ClassifyThresholds {
-  inaccuracy: number; // win% drop
+  inaccuracy: number;
   mistake: number;
   blunder: number;
 }
 
-export const DEFAULT_THRESHOLDS: ClassifyThresholds = {
-  inaccuracy: 6,
-  mistake: 12,
-  blunder: 20,
-};
+const DEFAULT_THRESHOLDS: ClassifyThresholds = { inaccuracy: 6, mistake: 12, blunder: 20 };
 
-/** Only-the-best-move gets 'best'; everything else graded by win% drop. */
-export function classify(drop: number, playedIsBest: boolean, t: ClassifyThresholds = DEFAULT_THRESHOLDS): MoveCls {
+export function classify(drop: number, playedIsBest: boolean, thresholds: ClassifyThresholds = DEFAULT_THRESHOLDS): MoveCls {
   if (playedIsBest || drop < 2) return 'best';
-  if (drop >= t.blunder) return 'blunder';
-  if (drop >= t.mistake) return 'mistake';
-  if (drop >= t.inaccuracy) return 'inaccuracy';
+  if (drop >= thresholds.blunder) return 'blunder';
+  if (drop >= thresholds.mistake) return 'mistake';
+  if (drop >= thresholds.inaccuracy) return 'inaccuracy';
   return 'good';
 }
 
-/** Lichess-style per-move accuracy from win% before/after (mover POV, 0-100). */
+/** Per-move accuracy from mover-perspective win percentages. */
 export function moveAccuracy(beforePov: number, afterPov: number): number {
-  // Harmonic-style curve: harsh on drops, near-100 on tiny ones.
-  const diff = Math.max(0, beforePov - afterPov);
-  return Math.max(0, Math.min(100, 103.1668 * Math.exp(-0.04354 * diff) - 3.1669));
+  if (afterPov >= beforePov) return 100;
+  const winDrop = beforePov - afterPov;
+  const raw = 103.1668100711649 * Math.exp(-0.04354415386753951 * winDrop) - 3.166924740191411;
+  return Math.max(0, Math.min(100, raw + 1));
 }
 
-/** Aggregate accuracy across a game from per-move win% pairs (Lichess formula). */
-export function aggregateAccuracy(pairs: { before: number; after: number }[]): number {
+function windowStdev(prefixSum: number[], prefixSquares: number[], start: number, size: number): number {
+  const end = start + size;
+  const sum = prefixSum[end] - prefixSum[start];
+  const sumSquares = prefixSquares[end] - prefixSquares[start];
+  const mean = sum / size;
+  return Math.sqrt(Math.max(0, sumSquares / size - mean * mean));
+}
+
+/**
+ * Aggregate move accuracy using Lichess's volatility-weighted and harmonic means.
+ * `winPercentSeries` contains every position in the relevant game/phase; indices
+ * locate this player's moves in that full sequence, including opponent turns.
+ */
+export function aggregateAccuracy(
+  pairs: { before: number; after: number }[],
+  winPercentSeries: number[] = pairs.length ? [pairs[0].before, ...pairs.map(({ after }) => after)] : [],
+  moveIndices: number[] = pairs.map((_, index) => index)
+): number {
   if (pairs.length === 0) return 100;
-  const mean = pairs.reduce((s, p) => s + moveAccuracy(p.before, p.after), 0) / pairs.length;
-  // Lichess applies a second curve on the mean per-move accuracy.
-  return Math.max(0, Math.min(100, 103.1668 * Math.exp(-0.04354 * mean) - 3.1669) > 100
-    ? 100
-    : 100 - (100 - mean) * 1.0);
+  const accuracies = pairs.map(({ before, after }) => moveAccuracy(before, after));
+  const moveCount = Math.max(1, winPercentSeries.length - 1);
+  const requestedWindow = Math.max(2, Math.min(8, Math.floor(moveCount / 10)));
+  const windowSize = Math.min(requestedWindow, winPercentSeries.length);
+  if (windowSize < 2) return accuracies.reduce((sum, accuracy) => sum + accuracy, 0) / accuracies.length;
+
+  const prefixSum = new Array(winPercentSeries.length + 1).fill(0);
+  const prefixSquares = new Array(winPercentSeries.length + 1).fill(0);
+  for (let i = 0; i < winPercentSeries.length; i++) {
+    prefixSum[i + 1] = prefixSum[i] + winPercentSeries[i];
+    prefixSquares[i + 1] = prefixSquares[i] + winPercentSeries[i] ** 2;
+  }
+
+  const repeatedInitialWindows = Math.max(0, Math.min(windowSize - 2, winPercentSeries.length - windowSize));
+  const windows: number[] = [];
+  for (let i = 0; i < repeatedInitialWindows; i++) windows.push(0);
+  for (let start = 0; start + windowSize <= winPercentSeries.length; start++) windows.push(start);
+  const weights = windows.map((start) => Math.max(0.5, Math.min(12,
+    windowStdev(prefixSum, prefixSquares, start, windowSize))));
+
+  let weightedTotal = 0;
+  let totalWeight = 0;
+  let reciprocalTotal = 0;
+  for (let i = 0; i < accuracies.length; i++) {
+    const index = Math.max(0, Math.min(moveCount - 1, Math.floor(moveIndices[i] ?? i)));
+    const weight = weights[index] ?? 0.5;
+    weightedTotal += accuracies[i] * weight;
+    totalWeight += weight;
+    reciprocalTotal += 1 / Math.max(0.001, accuracies[i]);
+  }
+  const weightedMean = weightedTotal / totalWeight;
+  const harmonicMean = accuracies.length / reciprocalTotal;
+  return Math.max(0, Math.min(100, (weightedMean + harmonicMean) / 2));
 }
 
 export interface PhaseSpan {
   name: 'opening' | 'middlegame' | 'endgame';
   fromPly: number;
-  toPly: number; // exclusive
+  toPly: number;
 }
 
-/** Phase split by piece count: opening while > 30 pieces on board, endgame when <= 12. */
+/** Split phases by piece count. */
 export function phaseSpans(pieceCounts: number[]): PhaseSpan[] {
   const spans: PhaseSpan[] = [];
-  let cur: PhaseSpan = { name: 'opening', fromPly: 0, toPly: 0 };
-  let curName: PhaseSpan['name'] = 'opening';
+  let start = 0;
+  let name: PhaseSpan['name'] | null = null;
   for (let ply = 0; ply < pieceCounts.length; ply++) {
-    const n = pieceCounts[ply];
-    let name: PhaseSpan['name'] = 'middlegame';
-    if (n > 28) name = 'opening';
-    else if (n <= 12) name = 'endgame';
-    if (name !== curName) {
-      cur.toPly = ply;
-      spans.push(cur);
-      cur = { name, fromPly: ply, toPly: ply };
-      curName = name;
-    } else {
-      cur.toPly = ply + 1;
+    const count = pieceCounts[ply];
+    const phase: PhaseSpan['name'] = count > 28 ? 'opening' : count <= 12 ? 'endgame' : 'middlegame';
+    if (name !== null && phase !== name) spans.push({ name, fromPly: start, toPly: ply });
+    if (phase !== name) {
+      name = phase;
+      start = ply;
     }
   }
-  cur.toPly = pieceCounts.length;
-  spans.push(cur);
-  return spans.filter((s) => s.toPly > s.fromPly);
+  if (name !== null && start < pieceCounts.length) spans.push({ name, fromPly: start, toPly: pieceCounts.length });
+  return spans;
 }
 
 export const CLS_ORDER: MoveCls[] = ['book', 'best', 'good', 'inaccuracy', 'mistake', 'blunder'];
-
 export const CLS_COLORS: Record<MoveCls, string> = {
   book: '#7d745e',
   best: '#81b64c',

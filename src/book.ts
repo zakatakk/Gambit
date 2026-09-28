@@ -84,7 +84,5 @@ const BOOK_PREFIXES: Set<string> = new Set(
 
 /** Is the SAN line (all moves so far) still within book? */
 export function isBookLine(sanHistory: string[]): boolean {
-  return BOOK_PREFIXES.has(sanHistory.join(' '));
+  return sanHistory.length > 0 && BOOK_PREFIXES.has(sanHistory.join(' '));
 }
-
-export const BOOK_LINE_COUNT = BOOK_LINES.length;

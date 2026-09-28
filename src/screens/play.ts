@@ -3,12 +3,13 @@ import { Chess } from 'chess.js';
 import { Board } from '../board';
 import { engine } from '../engineClient';
 import { ratingToStrength, ASSESSMENT_LEVELS } from '../engineStrength';
-import { applyGameResult } from '../ratingOps';
-import { getProfile, getSettings, addGame } from '../db';
+import { applyGameResult, setProfileRating } from '../ratingOps';
+import { ratePeriod } from '../glicko2';
+import { getProfile, getSettings, updateSettings, addGame, updateGame, updateProfile } from '../db';
 import { play } from '../sounds';
 import { el, modal, toast } from '../ui';
 import type { App } from '../app';
-import type { Color, GameResult, GameRecord, PuzzleItem } from '../types';
+import type { Color, EngineTier, GameResult, GameRecord, PuzzleItem } from '../types';
 import {
   newAssessment,
   priorFromPuzzles,
@@ -45,7 +46,10 @@ function shuffle<T>(arr: T[]): T[] {
 
 export async function mountPlay(container: HTMLElement, app: App, params: PlayParams): Promise<void> {
   const settings = await getSettings();
-  const selectedEngineTier = settings.engineTier === 'full' ? 'full' : 'lite';
+  if (!container.isConnected) return;
+  let activeEngineTier: EngineTier = settings.engineTier === 'full' ? 'full' : 'lite';
+  let assessed = (await getProfile()).assessed;
+  if (!container.isConnected) return;
   const game = new Chess();
 
   // ---------- state ----------
@@ -54,9 +58,11 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   let oppName = 'CPU';
   let thinking = false;
   let mode: 'idle' | 'game' | 'probe' | 'ladder' = 'idle';
-  let assessed = (await getProfile()).assessed;
   let lastLevel = 2;
   let assess: AssessmentState = newAssessment();
+  let probeGeneration = 0;
+  let ladderGeneration = 0;
+  let probeTimeout: ReturnType<typeof setTimeout> | undefined;
   let probe: {
     puzzle: AssessmentPuzzle;
     step: number;
@@ -65,8 +71,28 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     complete: boolean;
     solutionShown: boolean;
   } | null = null;
-  let probePool: PuzzleItem[] = [];
   let lastResult: 'win' | 'loss' | 'draw' = 'draw';
+  let gameGeneration = 0;
+  let reviewGeneration = 0;
+  const dispose = () => {
+    gameGeneration++;
+    probeGeneration++;
+    ladderGeneration++;
+    reviewGeneration++;
+    if (probeTimeout !== undefined) clearTimeout(probeTimeout);
+    probeTimeout = undefined;
+    engine.cancelSearch();
+    document.querySelectorAll('.modal-back').forEach((modal) => modal.remove());
+  };
+  container.addEventListener('screen-dispose', dispose, { once: true });
+
+  function scheduleProbe(callback: () => void, delay: number): void {
+    if (probeTimeout !== undefined) clearTimeout(probeTimeout);
+    probeTimeout = setTimeout(() => {
+      probeTimeout = undefined;
+      callback();
+    }, delay);
+  }
 
   // ---------- DOM ----------
   const boardHost = el('div', { class: 'board-wrap' });
@@ -170,14 +196,17 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     controls.textContent = '';
     const activeProbe = probe;
     const actions = el('div', { class: 'btn-row', style: 'margin-top:8px' });
-    if (activeProbe && !activeProbe.solutionShown) {
+    if (activeProbe?.complete && (activeProbe.puzzle.score ?? 0) > 0) {
+      actions.append(el('button', { class: 'primary', onclick: () => finishProbe() },
+        probeIndex + 1 < assess.puzzles.length ? 'Next puzzle' : 'Start games'));
+    } else if (activeProbe && !activeProbe.solutionShown) {
       actions.append(el('button', { class: 'probe-solution-action', onclick: () => displayProbeSolution(activeProbe) }, 'Show solution'));
     } else if (activeProbe?.complete) {
       actions.append(el('button', { class: 'primary', onclick: () => finishProbe() },
         probeIndex + 1 < assess.puzzles.length ? 'Next puzzle' : 'Start games'));
     }
     controls.append(moveList, actions);
-    if (activeProbe?.complete && !activeProbe.solutionShown) {
+    if (activeProbe?.complete && (activeProbe.puzzle.score ?? 0) === 0 && !activeProbe.solutionShown) {
       controls.append(el('p', { class: 'tiny' }, 'View the solution to continue.'));
     }
   }
@@ -225,16 +254,35 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
 
   // ---------- engine helpers ----------
   async function ensureEngine(onStatus: (s: string) => void): Promise<void> {
-    await engine.init(selectedEngineTier, (phase, frac) => {
-      if (phase === 'download') onStatus(`Downloading engine ${Math.round(frac * 100)}%`);
-      else onStatus('Booting engine…');
-    });
+    try {
+      await engine.init(activeEngineTier, (phase, frac) => {
+        if (phase === 'download') onStatus(`Downloading engine ${Math.round(frac * 100)}%`);
+        else onStatus('Booting engine…');
+      });
+    } catch (error) {
+      if (activeEngineTier !== 'full') throw error;
+      onStatus('Full engine unavailable — switching to lite…');
+      await engine.init('lite');
+      activeEngineTier = 'lite';
+      await updateSettings({ engineTier: 'lite' }).catch(() => {});
+      toast('Full engine unavailable. Continuing with lite.');
+    }
   }
 
   // ---------- game flow ----------
   async function startGame(opts?: { color?: Color; rating?: number; ladder?: boolean }): Promise<void> {
-    const p = await getProfile();
-    oppRating = Math.round(opts?.rating ?? p.rating);
+    const generation = ++gameGeneration;
+    let p;
+    try {
+      p = await getProfile();
+    } catch (error) {
+      if (generation === gameGeneration && container.isConnected) {
+        setStatus(`Could not load your profile: ${(error as Error).message}`, 'lose');
+      }
+      return;
+    }
+    if (generation !== gameGeneration || !container.isConnected) return;
+    oppRating = Math.round(opts?.rating ?? settings.lastOpponentRating ?? p.rating);
     playerColor = opts?.color ?? (Math.random() < 0.5 ? 'w' : 'b');
     oppName = opts?.ladder
       ? `Stockfish ${ASSESSMENT_LEVELS[lastLevel].label} (~${ASSESSMENT_LEVELS[lastLevel].rating})`
@@ -252,30 +300,40 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     controlsInGame(!opts?.ladder && !settings.strictMode);
     setStatus('Loading engine…');
     try {
-      await ensureEngine((s) => setStatus(s));
+      await ensureEngine((s) => {
+        if (generation === gameGeneration && container.isConnected) setStatus(s);
+      });
     } catch (e) {
-      setStatus(`Engine failed to load: ${(e as Error).message}`, 'lose');
+      if (generation === gameGeneration && container.isConnected) setStatus(`Engine failed to load: ${(e as Error).message}`, 'lose');
       return;
     }
+    if (generation !== gameGeneration || !container.isConnected || (mode !== 'game' && mode !== 'ladder')) return;
     setStatus(playerColor === 'w' ? 'Your move — you play White' : `You play Black. ${oppName} starts…`);
     board.setInteractive(game.turn() === playerColor);
     if (game.turn() !== playerColor) void engineMove();
   }
 
   async function engineMove(): Promise<void> {
-    if (mode !== 'game' && mode !== 'ladder') return;
-    if (game.isGameOver()) return;
+    if (thinking || !container.isConnected || (mode !== 'game' && mode !== 'ladder') || game.isGameOver()) return;
+
+    const generation = gameGeneration;
     thinking = true;
     board.setInteractive(false);
     setStatus(`${oppName} is thinking…`);
-    const strength = ratingToStrength(oppRating, settings.engineTier);
+    const strength = ratingToStrength(oppRating, activeEngineTier);
     try {
-      const mv = await engine.play(game.fen(), strength);
+      const fen = game.fen();
+      const mv = await engine.play(fen, strength);
+      if (generation !== gameGeneration || !container.isConnected) return;
+      if (game.fen() !== fen) throw new Error('Position changed while the engine was thinking');
       thinking = false;
       if (mode !== 'game' && mode !== 'ladder') return;
-      applyMove(mv, false);
+      if (game.turn() === playerColor) return;
+      if (!applyMove(mv, false)) throw new Error('Engine returned an illegal move');
     } catch (e) {
+      if (generation !== gameGeneration || !container.isConnected) return;
       thinking = false;
+      board.setInteractive(game.turn() === playerColor && (mode === 'game' || mode === 'ladder'));
       setStatus(`Engine error: ${(e as Error).message}`, 'lose');
     }
   }
@@ -332,9 +390,14 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       ? { result: forced, termination: termination ?? 'resignation' }
       : resultFromGameOver();
     board.setInteractive(false);
+    engine.cancelSearch();
     const wasLadderMode = mode === 'ladder';
+    gameGeneration++;
+    thinking = false;
     mode = 'idle';
     lastResult = r.result === 'abandoned' ? 'draw' : r.result;
+    const endedPlyCount = game.history().length;
+    const endedOpponentName = oppName;
     const msg =
       r.result === 'win' ? 'You win!' : r.result === 'loss' ? 'You lost.' : 'Draw.';
     setStatus(`${msg} (${r.termination})`, r.result === 'win' ? 'win' : r.result === 'loss' ? 'lose' : '');
@@ -351,32 +414,47 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       movesUci,
       startFen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
       opponentRating: oppRating,
-      opponentTier: settings.engineTier,
+      opponentTier: engine.tier ?? activeEngineTier,
       rated: assessed && !wasLadderMode,
       termination: r.termination,
     };
     const wasLadder = rec.type === 'assessment';
     const wasAssessed = assessed;
+    const finishedGameGeneration = gameGeneration;
     void (async () => {
-      await addGame(rec);
+      try {
+        rec.id = await addGame(rec);
+      } catch (error) {
+        if (container.isConnected) toast(`Could not save game: ${(error as Error).message}`);
+        if (finishedGameGeneration === gameGeneration && container.isConnected) setStatus('Game finished, but saving failed.', 'lose');
+        return;
+      }
+      if (finishedGameGeneration !== gameGeneration || !container.isConnected) return;
       if (wasLadder) {
         // Ladder games are scored as one batched rating period in
         // onLadderGameFinished() — no sequential update here.
       } else if (wasAssessed) {
-        const { before, after } = await applyGameResult({
-          oppRating,
-          result: r.result,
-          kind: 'game',
-        });
-        rec.ratingBefore = before;
-        rec.ratingAfter = after;
-        toast(`Rating: ${Math.round(before)} → ${Math.round(after)}`);
+        try {
+          const { before, after } = await applyGameResult({
+            oppRating,
+            result: r.result,
+            kind: 'game',
+          });
+          rec.ratingBefore = before;
+          rec.ratingAfter = after;
+          await updateGame(rec);
+          if (container.isConnected) toast(`Rating: ${Math.round(before)} → ${Math.round(after)}`);
+        } catch (error) {
+          if (container.isConnected) toast(`Game saved, but rating update failed: ${(error as Error).message}`);
+        }
       }
-      showPostGame(rec);
+      if (finishedGameGeneration === gameGeneration && container.isConnected) {
+        showPostGame(rec, endedOpponentName, endedPlyCount);
+      }
     })();
   }
 
-  function showPostGame(rec: GameRecord): void {
+  function showPostGame(rec: GameRecord, opponentNameAtEnd: string, plyCount: number): void {
     const ratingLine = rec.ratingAfter
       ? el('p', { class: 'muted' },
           `Rating ${Math.round(rec.ratingBefore ?? 0)} → `, el('b', {}, String(Math.round(rec.ratingAfter))))
@@ -387,35 +465,51 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     const closeSheet = modal(
       el('h2', {}, rec.result === 'win' ? 'Victory' : rec.result === 'loss' ? 'Defeat' : 'Draw'),
       ...(ratingLine ? [ratingLine as Node] : []),
-      el('p', { class: 'muted' }, `vs ${oppName} · ${rec.termination} · ${game.history().length} plies`),
+      el('p', { class: 'muted' }, `vs ${opponentNameAtEnd} · ${rec.termination} · ${plyCount} plies`),
       el('div', { class: 'btn-row' },
         reviewBtn,
         rec.type === 'assessment'
           ? el('button', { onclick: () => closeSheet() }, 'Continue')
           : el('button', { onclick: () => { closeSheet(); void startGame(); } }, 'Play again'),
-        el('button', { onclick: () => { closeSheet(); controlsDefault(); } }, 'Done'))
+        el('button', { onclick: () => {
+          closeSheet();
+          if (rec.type !== 'assessment') controlsDefault();
+        } }, 'Done'))
     );
   }
 
   function doReview(rec: GameRecord): void {
-    void openReview(rec);
+    const generation = ++reviewGeneration;
+    engine.cancelSearch();
+    void openReview(rec, () => generation === reviewGeneration && container.isConnected);
   }
 
   // ---------- helpers ----------
   async function hint(): Promise<void> {
     if (thinking || game.turn() !== playerColor) return;
+    const generation = gameGeneration;
+    const position = game.fen();
+    thinking = true;
+    board.setInteractive(false);
     setStatus('Thinking…');
     try {
-      const mv = await engine.analyse(game.fen(), 600, () => {});
+      const mv = await engine.analyse(position, 600, () => {});
+      if (generation !== gameGeneration || !container.isConnected || game.fen() !== position) return;
       if (!mv) throw new Error('no move');
       setStatus(`Hint: consider ${sanOf(mv)}`);
     } catch {
-      setStatus('Hint unavailable.');
+      if (generation === gameGeneration && container.isConnected) setStatus('Hint unavailable.');
+    } finally {
+      if (generation === gameGeneration && container.isConnected) {
+        thinking = false;
+        if ((mode === 'game' || mode === 'ladder') && game.turn() === playerColor) board.setInteractive(true);
+      }
     }
   }
 
   function takeback(): void {
     if (thinking || game.history().length === 0) return;
+    engine.cancelSearch();
     if (game.turn() === playerColor && game.history().length >= 2) game.undo();
     game.undo();
     board.setLastMove(null);
@@ -440,19 +534,23 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   }
 
   async function startAssessment(chosenMode: 'probe' | 'ladder' | 'quick' = 'probe'): Promise<void> {
+    const generation = ++probeGeneration;
+    ladderGeneration++;
     assess = newAssessment(chosenMode);
-    probePool = [];
+    if (chosenMode !== 'probe') mode = 'idle';
     if (chosenMode === 'probe') {
+      mode = 'probe';
       const all = await loadPuzzles().catch(() => [] as PuzzleItem[]);
+      if (generation !== probeGeneration || !container.isConnected) return;
       if (all.length === 0) {
         toast('Puzzle bundle missing — run: npm run puzzles');
         return;
       }
       // Probe: 8 puzzles around 1200-1800 to bracket the prior.
       const band = all.filter((p) => p.rating >= 1100 && p.rating <= 1900);
-      probePool = shuffle(band.length >= 8 ? band : all).slice(0, 8);
-      assess.puzzles = probePool.map((p) => ({ ...p })) as AssessmentPuzzle[];
-      assess.phase = 'puzzles';
+      assess.puzzles = shuffle(band.length >= 8 ? band : all)
+        .slice(0, 8)
+        .map((puzzle) => ({ ...puzzle }));
       mode = 'probe';
       probeIndex = 0;
       opponentLabel.textContent = 'Assessment';
@@ -465,9 +563,8 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     // ladder / quick: straight to games from the default prior.
     const prior = { ...LADDER_DEFAULT_PRIOR };
     assess.prior = prior;
-    const { setProfileRating } = await import('../ratingOps');
     await setProfileRating(prior.rating, prior.rd);
-    assess.phase = 'games';
+    if (generation !== probeGeneration || !container.isConnected) return;
     lastLevel = levelForRating(prior.rating);
     assess.currentLevel = lastLevel;
     mode = 'idle';
@@ -531,7 +628,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
         setStatus('Your move.');
         const token = ++activeProbe.token;
         board.setInteractive(false);
-        setTimeout(() => {
+        scheduleProbe(() => {
           if (probe !== activeProbe || activeProbe.complete || activeProbe.token !== token) return;
           board.setInteractive(true);
         }, 450);
@@ -569,14 +666,14 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     const token = ++activeProbe.token;
     setStatus('Correct — keep going.');
     board.setInteractive(false);
-    setTimeout(() => {
+    scheduleProbe(() => {
       if (probe !== activeProbe || activeProbe.complete || activeProbe.token !== token) return;
       void handleProbeMove(null, false);
     }, 550);
   }
 
   function finishProbe(): void {
-    if (!probe?.complete || !probe.solutionShown) return;
+    if (!probe?.complete || (!probe.solutionShown && (probe.puzzle.score ?? 0) <= 0)) return;
     probe = null;
     const nextI = probeIndex + 1;
     if (nextI < assess.puzzles.length) {
@@ -586,10 +683,10 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     // Probe complete → seed rating and start ladder
     const prior = priorFromPuzzles(assess.puzzles);
     assess.prior = prior;
+    const generation = ++probeGeneration;
     void (async () => {
-      const { setProfileRating } = await import('../ratingOps');
       await setProfileRating(prior.rating, prior.rd);
-      assess.phase = 'games';
+      if (generation !== probeGeneration || !container.isConnected) return;
       lastLevel = levelForRating(prior.rating);
       assess.currentLevel = lastLevel;
       toast(`Probe done — starting games from ${Math.round(prior.rating)}.`);
@@ -608,6 +705,9 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   // ---------- assessment: ladder ----------
 
   function onLadderGameFinished(): void {
+    if (!container.isConnected) return;
+    const generation = ++ladderGeneration;
+    if (assess.games.length >= (assess.mode === 'quick' ? 6 : assess.mode === 'ladder' ? 14 : 12)) return;
     const result = lastResult;
     assess.games.push({ level: lastLevel, result });
     // Batched rating period: accumulate matches, recompute from the prior each time.
@@ -620,21 +720,23 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     assess.currentLevel = nextLvl;
     void (async () => {
       // Recompute the whole period from the prior (no sequential compounding).
-      const { rate } = await import('../glicko2');
-      const { setProfileRating } = await import('../ratingOps');
       const prior = assess.prior ?? { rating: 1500, rd: 260 };
-      const batched = rate(
+      const matches = assess.matches.map((match) => ({ ...match, oppRd: 60 }));
+      const batched = ratePeriod(
         { rating: prior.rating, rd: prior.rd, volatility: 0.06, lastPlayed: Date.now() },
-        assess.matches.map((m) => ({ oppRating: m.oppRating, oppRd: 60, score: m.score })),
+        matches,
         Date.now()
       );
       // Floor at the lowest content band (600): pure math can go absurdly low
       // when every game is a resignation; the scale bottoms out here instead.
       const clamped = Math.max(600, Math.min(2900, batched.rating));
-      await setProfileRating(clamped, Math.min(200, batched.rd));
+      await setProfileRating(clamped, Math.min(200, batched.rd), 'assessment');
+      if (generation !== ladderGeneration || !container.isConnected) return;
       const p = await getProfile();
+      if (generation !== ladderGeneration || !container.isConnected) return;
       if (assessmentDone(assess, p.rd)) {
         await finishAssessment();
+        if (generation !== ladderGeneration || !container.isConnected) return;
         return;
       }
       toast(`Next: ${ASSESSMENT_LEVELS[lastLevel].label} (~${ASSESSMENT_LEVELS[lastLevel].rating}) · rating ${Math.round(p.rating)}`);
@@ -643,22 +745,21 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   }
 
   async function finishAssessment(): Promise<void> {
-    const prof = await getProfile();
+    const generation = ladderGeneration;
+    const prof = await updateProfile({ assessed: true });
+    if (generation !== ladderGeneration || !container.isConnected) return;
     assessed = true;
-    prof.assessed = true;
-    const { saveProfile } = await import('../db');
-    await saveProfile(prof);
     mode = 'idle';
-    modal(
+    const closeSheet = modal(
       el('h2', {}, 'Assessment complete'),
       el('p', {}, 'Your rating: ', el('b', { class: 'rating-big' }, String(Math.round(prof.rating))),
         el('span', { class: 'rd-badge' }, `± ${Math.round(prof.rd)}`)),
       el('p', { class: 'muted' },
         'The CPU now defaults to this level. Puzzles match it too. You can re-run the assessment anytime from Settings.'),
       el('div', { class: 'btn-row' },
-        el('button', { class: 'primary', onclick: () => { document.querySelector('.modal-back')?.remove(); app.navigate('home'); } }, 'Home'),
-        el('button', { onclick: () => { document.querySelector('.modal-back')?.remove(); void startGame(); } }, 'Play vs CPU'),
-        el('button', { onclick: () => { document.querySelector('.modal-back')?.remove(); app.navigate('puzzles'); } }, 'Solve puzzles'))
+        el('button', { class: 'primary', onclick: () => { closeSheet(); app.navigate('home'); } }, 'Home'),
+        el('button', { onclick: () => { closeSheet(); void startGame(); } }, 'Play vs CPU'),
+        el('button', { onclick: () => { closeSheet(); app.navigate('puzzles'); } }, 'Solve puzzles'))
     );
   }
 

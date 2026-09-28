@@ -12,6 +12,11 @@ export interface BoardOptions {
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'] as const;
 const RANKS = ['8', '7', '6', '5', '4', '3', '2', '1'] as const;
 
+export function boardSquareAt(row: number, col: number, orientation: Color): string {
+  const white = orientation === 'w';
+  return `${FILES[white ? col : 7 - col]}${RANKS[white ? row : 7 - row]}`;
+}
+
 export class Board {
   el: HTMLElement;
   private game: Chess;
@@ -58,14 +63,25 @@ export class Board {
   private buildGrid(): void {
     this.el.innerHTML = '';
     this.squareEls.clear();
-    const white = this.opts.orientation === 'w';
     for (let r = 0; r < 8; r++) {
       for (let f = 0; f < 8; f++) {
         // White: a8 top-left. Black: proper 180° rotation — h1 top-left.
-        const sq = `${FILES[white ? f : 7 - f]}${RANKS[white ? r : 7 - r]}`;
+        const sq = boardSquareAt(r, f, this.opts.orientation);
         const cell = document.createElement('div');
         cell.className = `square ${(r + f) % 2 === 0 ? 'light' : 'dark'}`;
         cell.dataset.sq = sq;
+        if (r === 7) {
+          const fileLabel = document.createElement('span');
+          fileLabel.className = 'coord file';
+          fileLabel.textContent = sq[0];
+          cell.appendChild(fileLabel);
+        }
+        if (f === 0) {
+          const rankLabel = document.createElement('span');
+          rankLabel.className = 'coord rank';
+          rankLabel.textContent = sq[1];
+          cell.appendChild(rankLabel);
+        }
         this.squareEls.set(sq, cell);
         this.el.appendChild(cell);
         cell.addEventListener('pointerdown', (e) => this.onPointerDown(e, sq, e));
@@ -103,8 +119,7 @@ export class Board {
     const col = Math.floor(((x - rect.left) / size) * 8);
     const row = Math.floor(((y - rect.top) / size) * 8);
     if (col < 0 || col > 7 || row < 0 || row > 7) return null;
-    const white = this.opts.orientation === 'w';
-    return `${FILES[white ? col : 7 - col]}${RANKS[white ? row : 7 - row]}`;
+    return boardSquareAt(row, col, this.opts.orientation);
   }
 
   /** Board-level pointerup: handles drag drops (capture retargets here) and taps. */

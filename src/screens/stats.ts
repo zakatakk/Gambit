@@ -1,11 +1,13 @@
 /** Stats: rating history chart, game record, puzzle accuracy, reviews, history list. */
 import { getHistory, recentGames, getAttempts, getProfile, reviewedGameTimestamps } from '../db';
-import { el, modal } from '../ui';
+import { engine } from '../engineClient';
+import { el } from '../ui';
 import { openReview } from './reviewView';
 import type { App } from '../app';
 import type { GameRecord } from '../types';
 
 export async function mountStats(container: HTMLElement, _app: App): Promise<void> {
+  container.addEventListener('screen-dispose', () => engine.cancelSearch(), { once: true });
   const [profile, history, games, attempts, reviewed] = await Promise.all([
     getProfile(),
     getHistory(200),
@@ -13,6 +15,7 @@ export async function mountStats(container: HTMLElement, _app: App): Promise<voi
     getAttempts(),
     reviewedGameTimestamps(),
   ]);
+  if (!container.isConnected) return;
 
   const card = el('div', { class: 'card center' },
     el('p', { class: 'muted', style: 'margin:0' }, 'Rating'),
@@ -85,7 +88,10 @@ export async function mountStats(container: HTMLElement, _app: App): Promise<voi
 
   function reviewTile(g: GameRecord, analysed: boolean): HTMLElement {
     const res = g.result === 'win' ? 'W' : g.result === 'loss' ? 'L' : 'D';
-    return el('button', { class: 'moment-tile', onclick: () => void openReview(g) },
+    return el('button', {
+      class: 'moment-tile',
+      onclick: () => void openReview(g, () => container.isConnected),
+    },
       el('span', {},
         el('b', {}, res), ` vs CPU ${Math.round(g.opponentRating)}`),
       el('span', { class: 'muted' }, new Date(g.ts).toLocaleDateString()),
@@ -93,13 +99,4 @@ export async function mountStats(container: HTMLElement, _app: App): Promise<voi
     );
   }
 
-  function showGame(_id: number, movesUci: string): void {
-    const plies = movesUci.trim().split(/\s+/).filter(Boolean);
-    modal(
-      el('h2', {}, 'Moves'),
-      el('p', { class: 'move-list' }, plies.map((u, i) => `${i % 2 === 0 ? `${i / 2 + 1}.` : ''} ${u.slice(0, 2)}${u.slice(2, 4)}`).join(' ') as unknown as Node),
-      el('p', { class: 'muted' }, 'Open this game from Game reviews above for the full analysis.')
-    );
-  }
-  void showGame;
 }

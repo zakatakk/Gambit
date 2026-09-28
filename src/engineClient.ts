@@ -1,9 +1,7 @@
 /**
- * Engine client. Stockfish builds (both lite SF10 and full SF16) are used
- * DIRECTLY as classic Workers speaking UCI line strings — their documented
- * web usage. We send UCI commands; we receive UCI lines.
- * Strength = Skill Level + UCI_LimitStrength + MultiPV-based move selection
- * (randomization among near-best lines) computed on 'bestmove'.
+ * Engine client. Stockfish builds (lite SF10 and full SF16) are classic Web
+ * Workers speaking UCI lines directly. Search calls share one worker and are
+ * serialized; engine failure rejects the active request instead of hanging UI.
  */
 import type { ChessJsMove, EngineStrengthParams } from './engineProtocol';
 import type { EngineTier } from './types';
@@ -12,37 +10,64 @@ interface InfoLine {
   cp: number | null;
   mate: number | null;
   pv: string[];
+  depth: number;
+  multipv: number;
 }
 
 const SEARCH_TIMEOUT_MIN_MS = 5_000;
 const SEARCH_TIMEOUT_GRACE_MS = 1_500;
 const ENGINE_INIT_TIMEOUT_MS = 90_000;
+const ENGINE_ASSET_CACHE = 'gambit-engine-assets-v2';
+const LITE_ENGINE_ASSETS = [
+  { file: 'stockfish.js', size: 0 },
+  { file: 'stockfish.wasm', size: 0 },
+] as const;
 const FULL_ENGINE_ASSETS = [
   { file: 'stockfish-nnue-16-single.js', size: 25_594 },
   { file: 'stockfish-nnue-16-single.wasm', size: 575_029 },
   { file: 'nn-5af11540bbfe.nnue', size: 40_119_326 },
 ] as const;
 
-async function fetchProgress(
+export async function fetchProgress(
   url: string,
   onFrac: (f: number) => void,
   expectedBytes?: number
 ): Promise<void> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Engine download failed (${res.status})`);
-  const total = expectedBytes ?? Number(res.headers.get('content-length') || 0);
-  if (!res.body) {
+  let cache: Cache | null = null;
+  try {
+    if ('caches' in globalThis) cache = await caches.open(ENGINE_ASSET_CACHE);
+  } catch {
+    // Private mode or quota restrictions should not prevent online play.
+  }
+
+  if (cache && await cache.match(url)) {
     onFrac(1);
     return;
   }
-  const reader = res.body.getReader();
-  let got = 0;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Engine download failed (${res.status}): ${url}`);
+
+  // Cache a clone directly as a stream; the engine worker then reuses these bytes
+  // instead of causing another full network download during startup.
+  const cacheWrite = cache?.put(url, res.clone()).catch(() => undefined);
+  const total = expectedBytes ?? Number(res.headers.get('content-length') || 0);
+  const reader = res.body?.getReader();
+  if (!reader) {
+    await cacheWrite;
+    onFrac(1);
+    return;
+  }
+
+  let received = 0;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    got += value.length;
-    if (total > 0) onFrac(Math.min(1, got / total));
+    received += value.length;
+    if (total > 0) onFrac(Math.min(1, received / total));
   }
+  if (received === 0) throw new Error(`Downloaded engine asset is empty: ${url}`);
+  await cacheWrite;
   onFrac(1);
 }
 
@@ -50,48 +75,57 @@ async function downloadEngineAssets(
   tier: EngineTier,
   onProgress?: (phase: string, frac: number) => void
 ): Promise<void> {
-  const assets = tier === 'full'
-    ? FULL_ENGINE_ASSETS
-    : [{ file: 'stockfish.js', size: 0 }];
+  const assets = tier === 'full' ? FULL_ENGINE_ASSETS : LITE_ENGINE_ASSETS;
   const totalBytes = assets.reduce((total, asset) => total + asset.size, 0);
   let downloadedBytes = 0;
+  let completedAssets = 0;
 
   for (const asset of assets) {
-    await fetchProgress(
-      `${import.meta.env.BASE_URL}engine/${asset.file}`,
-      (frac) => {
-        const done = downloadedBytes + (asset.size ? Math.round(frac * asset.size) : frac);
-        onProgress?.('download', totalBytes ? done / totalBytes : frac);
-      },
-      asset.size || undefined
-    );
+    try {
+      await fetchProgress(
+        `${import.meta.env.BASE_URL}engine/${asset.file}`,
+        (fraction) => {
+          const progress = totalBytes
+            ? (downloadedBytes + fraction * asset.size) / totalBytes
+            : (completedAssets + fraction) / assets.length;
+          onProgress?.('download', progress);
+        },
+        asset.size || undefined
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Could not fetch ${asset.file}: ${message}`, { cause: error });
+    }
     downloadedBytes += asset.size;
+    completedAssets++;
   }
 }
 
 function isFullEngineReady(worker: Worker, resolve: () => void, reject: (error: Error) => void): (line: string) => void {
   let isReady = false;
   let networkLoaded = false;
-  let nnueEnabled = false;
   let settled = false;
+  let initialized = false;
 
   return (line) => {
     if (settled) return;
-    if (line === 'uciok') {
+    if (line === 'uciok' && !initialized) {
+      initialized = true;
       worker.postMessage('setoption name Use NNUE value true');
       worker.postMessage('isready');
     } else if (line === 'Load eval file success: 1') {
       networkLoaded = true;
-    } else if (line === 'info string NNUE evaluation enabled.') {
-      nnueEnabled = true;
     } else if (line.startsWith('Failed to download eval file')) {
       settled = true;
       reject(new Error('Stockfish could not load its NNUE network'));
+      return;
     } else if (line === 'readyok') {
       isReady = true;
     }
 
-    if (isReady && networkLoaded && nnueEnabled) {
+    // Stockfish can print “NNUE evaluation enabled” only after its first search.
+    // readyok fences the option/load commands; do not wait for that info line.
+    if (isReady && networkLoaded) {
       settled = true;
       resolve();
     }
@@ -99,9 +133,14 @@ function isFullEngineReady(worker: Worker, resolve: () => void, reject: (error: 
 }
 
 function isLiteEngineReady(worker: Worker, resolve: () => void): (line: string) => void {
+  let initialized = false;
   return (line) => {
-    if (line === 'uciok') worker.postMessage('isready');
-    else if (line === 'readyok') resolve();
+    if (line === 'uciok' && !initialized) {
+      initialized = true;
+      worker.postMessage('isready');
+    } else if (line === 'readyok') {
+      resolve();
+    }
   };
 }
 
@@ -125,37 +164,37 @@ function waitForEngineReady(worker: Worker, tier: EngineTier): Promise<void> {
 
     worker.onmessage = (event: MessageEvent) => onReady(String(event.data));
     worker.onerror = (event) => finish(new Error(event.message || 'engine worker failed to boot'));
-    worker.postMessage('uci');
+    worker.onmessageerror = () => finish(new Error('Could not read engine worker response'));
+    try {
+      worker.postMessage('uci');
+    } catch (error) {
+      finish(error instanceof Error ? error : new Error(String(error)));
+    }
   });
 }
 
-/** Choose among the engine's MultiPV lines according to desired strength. */
+/** Choose a weaker UCI multipv candidate without mistaking later depths for new lines. */
 export function pickMove(lines: InfoLine[], strength: EngineStrengthParams): string {
-  const list = lines.filter((l) => l.pv.length > 0);
-  if (list.length === 0) return '';
-  const cpOf = (l: InfoLine) =>
-    l.mate !== null ? (l.mate > 0 ? 10000 - l.mate * 10 : -10000 - l.mate * 10) : (l.cp ?? 0);
-  const best = list[0];
-  const bestCp = cpOf(best);
+  const candidates = lines.filter((line) => line.pv.length > 0)
+    .sort((a, b) => a.multipv - b.multipv);
+  if (candidates.length === 0) return '';
+  const score = (line: InfoLine) => line.mate !== null
+    ? (line.mate > 0 ? 10000 - line.mate * 10 : -10000 - line.mate * 10)
+    : (line.cp ?? 0);
+  const bestScore = score(candidates[0]);
 
-  // Occasionally play a clearly worse line (human-like error at low ratings).
-  const blunderChance = strength.blunderChance ?? 0;
-  if (blunderChance > 0 && Math.random() < blunderChance) {
-    const badPool = list.filter((l) => bestCp - cpOf(l) <= 320 && cpOf(l) > -400);
-    if (badPool.length > 1) {
-      return badPool[1 + Math.floor(Math.random() * (badPool.length - 1))].pv[0];
-    }
+  if ((strength.blunderChance ?? 0) > 0 && Math.random() < (strength.blunderChance ?? 0)) {
+    const weaker = candidates.filter((line) => bestScore - score(line) <= 320 && score(line) > -400);
+    if (weaker.length > 1) return weaker[1 + Math.floor(Math.random() * (weaker.length - 1))].pv[0];
   }
-  // Otherwise randomize among near-best lines within the window.
+
   const window = strength.randomCp ?? 0;
-  const pool = list.filter((l) => {
-    const loss = bestCp - cpOf(l);
-    return loss >= 0 && loss <= window && cpOf(l) > -500;
+  const nearBest = candidates.filter((line) => {
+    const loss = bestScore - score(line);
+    return loss >= 0 && loss <= window && score(line) > -500;
   });
-  if (pool.length > 1) {
-    return pool[Math.floor(Math.random() * pool.length)].pv[0];
-  }
-  return best.pv[0];
+  if (nearBest.length > 1) return nearBest[Math.floor(Math.random() * nearBest.length)].pv[0];
+  return candidates[0].pv[0];
 }
 
 export class EngineClient {
@@ -177,7 +216,9 @@ export class EngineClient {
       return;
     }
     if (this.initialization) {
-      await this.initialization.promise.catch(() => {});
+      const previous = this.initialization.promise;
+      await previous.catch(() => {});
+      if (this.initialization?.promise === previous) this.initialization = null;
       return this.init(tier, onProgress);
     }
 
@@ -195,13 +236,9 @@ export class EngineClient {
 
   private async initializeWorker(tier: EngineTier, onProgress?: (phase: string, frac: number) => void): Promise<void> {
     const file = tier === 'full' ? 'stockfish-nnue-16-single.js' : 'stockfish.js';
-    // Resolves under the deploy base (works at / and /repo/ on GitHub Pages).
-    // Plain path concat (NOT new URL + import.meta.url): Vite rewrites that
-    // pattern into a static asset import, which breaks the dynamic tier switch.
+    // Plain path concatenation preserves runtime tier switching in Vite builds.
     const engineUrl = `${import.meta.env.BASE_URL}engine/${file}`;
 
-    // Warm the HTTP/SW cache for the JS, WASM and (for full) NNUE network.
-    // The engine's own worker fetches those files again from this cache at boot.
     onProgress?.('download', 0);
     await downloadEngineAssets(tier, onProgress);
     onProgress?.('booting', 1);
@@ -217,11 +254,14 @@ export class EngineClient {
 
     if (this.worker !== worker) throw new Error('Engine worker was superseded during initialization');
 
-    worker.onmessage = (ev: MessageEvent) => {
-      this.lineHandler?.(String(ev.data));
+    worker.onmessage = (event: MessageEvent) => this.lineHandler?.(String(event.data));
+    worker.onerror = (event) => {
+      const error = new Error(event.message || 'engine worker failed');
+      if (this.activeSearchFailure) this.activeSearchFailure(error);
+      else this.discardWorker(worker);
     };
-    worker.onerror = (e) => {
-      const error = new Error(e.message || 'engine worker failed');
+    worker.onmessageerror = () => {
+      const error = new Error('Could not read engine worker response');
       if (this.activeSearchFailure) this.activeSearchFailure(error);
       else this.discardWorker(worker);
     };
@@ -230,12 +270,19 @@ export class EngineClient {
   }
 
   private send(line: string): void {
-    this.worker?.postMessage(line);
+    if (!this.worker) throw new Error('Engine worker is not available');
+    this.worker.postMessage(line);
+  }
+
+  /** Cancel an active search without allowing a stale bestmove to reach the next screen. */
+  cancelSearch(): void {
+    this.activeSearchFailure?.(new Error('Engine search cancelled'));
   }
 
   private discardWorker(worker: Worker): void {
     worker.onmessage = null;
     worker.onerror = null;
+    worker.onmessageerror = null;
     worker.terminate();
     if (this.worker === worker) {
       this.worker = null;
@@ -257,7 +304,6 @@ export class EngineClient {
 
     const timeoutMs = Math.max(SEARCH_TIMEOUT_MIN_MS, Math.ceil(Math.max(0, moveTime) * 5));
     return new Promise<T>((resolve, reject) => {
-      const previousHandler = this.lineHandler;
       let settled = false;
       let timeout: ReturnType<typeof setTimeout> | undefined;
       let stopTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -267,7 +313,7 @@ export class EngineClient {
       const cleanup = () => {
         if (timeout !== undefined) clearTimeout(timeout);
         if (stopTimeout !== undefined) clearTimeout(stopTimeout);
-        if (this.lineHandler === handleLine) this.lineHandler = previousHandler;
+        if (this.lineHandler === handleLine) this.lineHandler = null;
         if (this.activeSearchFailure === handleWorkerFailure) this.activeSearchFailure = null;
       };
       const fail = (error: Error, discardWorker = false) => {
@@ -297,8 +343,8 @@ export class EngineClient {
       timeout = setTimeout(() => {
         try {
           this.send('stop');
-        } catch {
-          fail(new Error('Engine worker stopped responding'), true);
+        } catch (error) {
+          fail(error instanceof Error ? error : new Error(String(error)), true);
           return;
         }
         stopTimeout = setTimeout(
@@ -316,19 +362,23 @@ export class EngineClient {
   }
 
   async play(fen: string, strength: EngineStrengthParams): Promise<ChessJsMove> {
-    const lines: InfoLine[] = [];
+    const latestByPv = new Map<number, InfoLine>();
     const useMulti = (strength.randomCp ?? 0) > 0 || (strength.blunderChance ?? 0) > 0;
     return this.search(strength.moveTime, (line, resolve, reject) => {
       if (line.startsWith('info')) {
-        const l = parseInfo(line);
-        if (l) lines.push(l);
+        const info = parseInfo(line);
+        if (info) {
+          const previous = latestByPv.get(info.multipv);
+          if (!previous || info.depth >= previous.depth) latestByPv.set(info.multipv, info);
+        }
       } else if (line.startsWith('bestmove')) {
         const raw = line.split(/\s+/)[1] ?? '';
         if (!raw || raw === '(none)') {
           reject(new Error('no-move'));
           return;
         }
-        const chosen = useMulti && lines.length > 0 ? pickMove(lines, strength) : raw;
+        const candidates = [...latestByPv.values()];
+        const chosen = useMulti && candidates.length > 0 ? pickMove(candidates, strength) : raw;
         const uci = chosen || raw;
         const mv: ChessJsMove = { from: uci.slice(0, 2), to: uci.slice(2, 4) };
         if (uci.length > 4) mv.promotion = uci[4];
@@ -352,12 +402,15 @@ export class EngineClient {
   async analyse(
     fen: string,
     moveTime: number,
-    onEval: (cp: number, pv: string[]) => void
+    onEval: (cp: number | null, mate: number | null, pv: string[], depth: number, multipv: number) => void,
+    multiPv = 1
   ): Promise<ChessJsMove> {
     return this.search(moveTime, (line, resolve, reject) => {
       if (line.startsWith('info')) {
-        const l = parseInfo(line);
-        if (l && l.cp !== null) onEval(l.cp, l.pv);
+        const info = parseInfo(line);
+        if (info && (info.cp !== null || info.mate !== null)) {
+          onEval(info.cp, info.mate, info.pv, info.depth, info.multipv);
+        }
       } else if (line.startsWith('bestmove')) {
         const raw = line.split(/\s+/)[1] ?? '';
         if (!raw || raw === '(none)') {
@@ -370,27 +423,28 @@ export class EngineClient {
       }
     }, () => {
       this.send('ucinewgame');
-      this.send('setoption name MultiPV value 1');
+      this.send(`setoption name MultiPV value ${Math.max(1, Math.min(5, Math.floor(multiPv)))}`);
       this.send('setoption name UCI_LimitStrength value false');
       this.send(`position fen ${fen}`);
       this.send(`go movetime ${moveTime | 0}`);
     });
   }
 
-  stop(): void {
-    this.send('stop');
-  }
 }
 
 function parseInfo(line: string): InfoLine | null {
-  const mCp = /score cp (-?\d+)/.exec(line);
-  const mMate = /score mate (-?\d+)/.exec(line);
-  const mPv = / pv (.+)$/.exec(line);
-  if ((!mCp && !mMate) || !mPv) return null;
+  const cpMatch = /\bscore cp (-?\d+)/.exec(line);
+  const mateMatch = /\bscore mate (-?\d+)/.exec(line);
+  const depthMatch = /\bdepth (\d+)/.exec(line);
+  const multipvMatch = /\bmultipv (\d+)/.exec(line);
+  const pvMatch = /\b pv (.+)$/.exec(line);
+  if ((!cpMatch && !mateMatch) || !pvMatch) return null;
   return {
-    cp: mCp ? parseInt(mCp[1], 10) : null,
-    mate: mMate ? parseInt(mMate[1], 10) : null,
-    pv: mPv[1].trim().split(/\s+/),
+    cp: cpMatch ? parseInt(cpMatch[1], 10) : null,
+    mate: mateMatch ? parseInt(mateMatch[1], 10) : null,
+    pv: pvMatch[1].trim().split(/\s+/),
+    depth: depthMatch ? parseInt(depthMatch[1], 10) : 0,
+    multipv: multipvMatch ? parseInt(multipvMatch[1], 10) : 1,
   };
 }
 

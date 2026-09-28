@@ -13,8 +13,3 @@ export function pieceImg(type: string, color: 'w' | 'b'): HTMLImageElement {
   img.draggable = false;
   return img;
 }
-
-/** Kept for compatibility with existing callers (returns an <img>). */
-export function pieceSvg(type: string, color: 'w' | 'b'): HTMLImageElement {
-  return pieceImg(type, color);
-}

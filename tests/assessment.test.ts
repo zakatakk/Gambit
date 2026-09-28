@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rate } from '../src/glicko2';
+import { rate, ratePeriod } from '../src/glicko2';
 import {
   priorFromPuzzles,
   nextLevel,
@@ -13,6 +13,44 @@ function batchedLadder(prior: { rating: number; rd: number }, scores: (0 | 0.5 |
   const matches = scores.map((score, i) => ({ oppRating: oppRatings[i], oppRd: 60, score }));
   return rate({ rating: prior.rating, rd: prior.rd, volatility: 0.06, lastPlayed: 0 }, matches, 0);
 }
+
+describe('Glicko-2', () => {
+  it('matches Glickman’s published example', () => {
+    const result = rate({
+      rating: 1500,
+      rd: 200,
+      volatility: 0.06,
+      lastPlayed: 0,
+    }, [
+      { oppRating: 1400, oppRd: 30, score: 1 },
+      { oppRating: 1550, oppRd: 100, score: 0 },
+      { oppRating: 1700, oppRd: 300, score: 0 },
+    ], 0);
+
+    // The exact implementation result is 1464.05067; the paper rounds this
+    // to 1464.06 while some independent implementations retain the exact value.
+    expect(result.rating).toBeCloseTo(1464.05067, 4);
+    expect(result.rd).toBeCloseTo(151.51652, 4);
+    expect(result.volatility).toBeCloseTo(0.059996, 5);
+  });
+
+  it('validates inputs rather than returning a poisoned rating', () => {
+    const state = { rating: 1500, rd: 200, volatility: 0.06, lastPlayed: 0 };
+    expect(() => rate(state, [{ oppRating: 1500, oppRd: 60, score: 2 }], 0)).toThrow(RangeError);
+    expect(() => rate(state, [{ oppRating: 1500, oppRd: 0, score: 0.5 }], 0)).toThrow(RangeError);
+    expect(() => rate({ ...state, volatility: Number.NaN }, [], 0)).toThrow(RangeError);
+  });
+
+  it('supports assessment batches as one rating period', () => {
+    const prior = { rating: 1200, rd: 300, volatility: 0.06, lastPlayed: 0 };
+    const matches = [
+      { oppRating: 1200, oppRd: 60, score: 1 },
+      { oppRating: 1400, oppRd: 60, score: 0 },
+    ] as const;
+    expect(ratePeriod(prior, [...matches], 0)).toEqual(rate(prior, [...matches], 0));
+    expect(ratePeriod(prior, [], 0)).toEqual({ ...prior, lastPlayed: 0 });
+  });
+});
 
 describe('assessment', () => {
   it('all-losses run drops far below the prior with tight RD (true performance)', () => {
@@ -126,9 +164,7 @@ describe('assessment', () => {
   it('ladder/quick default prior is 1200 ±300', () => {
     expect(LADDER_DEFAULT_PRIOR.rating).toBe(1200);
     expect(LADDER_DEFAULT_PRIOR.rd).toBe(300);
-    const s = newAssessment('ladder');
-    expect(s.phase).toBe('games');
-    const q = newAssessment('quick');
-    expect(q.phase).toBe('games');
+    expect(newAssessment('ladder').mode).toBe('ladder');
+    expect(newAssessment('quick').mode).toBe('quick');
   });
 });
