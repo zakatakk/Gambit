@@ -25,6 +25,8 @@ export class Board {
   private pendingPromotion: { from: Square; to: string } | null = null;
   private dragging: { from: Square; ghost: HTMLElement } | null = null;
   private lastMove: { from: string; to: string } | null = null;
+  private previewFen: string | null = null;
+  private previewLastMove: { from: string; to: string } | null = null;
   private squareEls = new Map<string, HTMLElement>();
 
   constructor(container: HTMLElement, game: Chess, opts: BoardOptions) {
@@ -60,6 +62,24 @@ export class Board {
     this.clearMarks();
   }
 
+  /** Show a past position without touching the live game state. */
+  showPosition(fen: string, lastMove: { from: string; to: string } | null): void {
+    this.previewFen = fen;
+    this.previewLastMove = lastMove;
+    this.selected = null;
+    this.pendingPromotion = null;
+    this.el.parentElement?.querySelectorAll('.promo').forEach((n) => n.remove());
+    this.render();
+  }
+
+  /** Return the board to the live game position. */
+  clearPreview(): void {
+    if (this.previewFen === null) return;
+    this.previewFen = null;
+    this.previewLastMove = null;
+    this.render();
+  }
+
   private buildGrid(): void {
     this.el.innerHTML = '';
     this.squareEls.clear();
@@ -91,23 +111,25 @@ export class Board {
     }
   }
 
-  /** Re-render pieces + highlights from game state. */
+  /** Re-render pieces + highlights from live or preview position. */
   render(): void {
+    const previewGame = this.previewFen === null ? null : new Chess(this.previewFen);
+    const lastMove = this.previewFen === null ? this.lastMove : this.previewLastMove;
     for (const [sq, cell] of this.squareEls) {
       cell.classList.remove('sel', 'last', 'dot', 'capturable', 'over');
       cell.querySelectorAll('.piece').forEach((n) => n.remove());
-      const piece = this.game.get(sq as Square);
+      const piece = previewGame ? previewGame.get(sq as Square) : this.game.get(sq as Square);
       if (piece) {
         const wrap = document.createElement('div');
         wrap.className = 'piece';
         wrap.appendChild(pieceImg(piece.type, piece.color));
         cell.appendChild(wrap);
       }
-      if (this.lastMove && (sq === this.lastMove.from || sq === this.lastMove.to)) {
+      if (lastMove && (sq === lastMove.from || sq === lastMove.to)) {
         cell.classList.add('last');
       }
     }
-    if (this.selected) {
+    if (!previewGame && this.selected) {
       this.squareEls.get(this.selected)?.classList.add('sel');
       this.showLegal(this.selected);
     }
@@ -152,7 +174,7 @@ export class Board {
   }
 
   private onPointerDown(e: PointerEvent, sq: string): void {
-    if (!this.opts.interactive || this.pendingPromotion) return;
+    if (!this.opts.interactive || this.pendingPromotion || this.previewFen !== null) return;
     // Capture the pointer on the BOARD (not the square) so drags keep firing
     // pointermove/pointerup at the board even if the finger leaves the cell.
     try {

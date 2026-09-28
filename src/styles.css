@@ -279,6 +279,7 @@ nav.tabs button:active { color: var(--ink); }
 }
 .status-bar.win { color: var(--ok); font-style: normal; font-weight: 600; }
 .status-bar.lose { color: var(--bad); font-style: normal; font-weight: 600; }
+body.viewing .status-bar { opacity: 0.55; }
 
 .move-list {
   font-family: var(--mono); font-size: 0.86rem; color: var(--ink-2);
@@ -286,6 +287,20 @@ nav.tabs button:active { color: var(--ink); }
 }
 .move-list .num { color: var(--ink-3); display: inline-block; min-width: 30px; }
 .move-list .ply { margin-right: 12px; white-space: nowrap; }
+.move-list button.ply {
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+}
+.move-list button.ply.current { font-weight: 600; }
+.move-list button.ply:not(.current) { opacity: 0.45; }
+
+.seek-row { display: flex; gap: 6px; margin-top: 8px; }
+.seek-row button { flex: 1; padding: 8px 0; font-size: 0.85rem; }
 
 /* ---------- home hero ---------- */
 .hero { padding-top: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--rule-2); }

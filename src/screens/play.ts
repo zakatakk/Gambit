@@ -219,6 +219,11 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   const statusBar = el('div', { class: 'status-bar' }, '');
   const moveList = el('div', { class: 'move-list' }, '—');
   const controls = el('div', { class: 'section' });
+  const seekRow = el('div', { class: 'seek-row btn-row' },
+    el('button', { onclick: () => showPly(0) }, '⏮ Start'),
+    el('button', { onclick: () => showPly((viewingPly ?? historyVerbose().length) - 1) }, '◀ Prev'),
+    el('button', { onclick: () => showPly((viewingPly ?? historyVerbose().length - 1) + 1) }, 'Next ▶'),
+    el('button', { class: 'latest', onclick: () => showPly(null) }, 'Latest ⏭'));
   const board = new Board(boardHost, game, {
     orientation: 'w',
     interactive: false,
@@ -237,17 +242,69 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     statusBar.className = `status-bar ${cls}`;
   }
 
+  // ---------- position seeking ----------
+  let viewingPly: number | null = null; // ply index (1-based) shown on the board
+
+  const historyVerbose = () => game.history({ verbose: true });
+
+  function fenAtPly(ply: number): string {
+    if (ply >= historyVerbose().length) return game.fen();
+    const replay = new Chess();
+    for (const move of historyVerbose().slice(0, ply)) {
+      replay.move({ from: move.from, to: move.to, promotion: move.promotion });
+    }
+    return replay.fen();
+  }
+
+  function showPly(ply: number | null): void {
+    const history = historyVerbose();
+    const live = ply === null || ply >= history.length;
+    document.body.classList.toggle('viewing', !live);
+    if (live) {
+      viewingPly = null;
+      board.clearPreview();
+      renderMoves();
+      showSeekRow(false);
+      if (mode === 'game' || mode === 'ladder') {
+        if (!game.isGameOver()) setStatus(game.turn() === playerColor ? 'Your move' : `${oppName} is thinking…`);
+      }
+      return;
+    }
+    const clamped = Math.max(0, ply);
+    const move = clamped === 0 ? null : history[clamped - 1];
+    board.showPosition(fenAtPly(clamped), move ? { from: move.from, to: move.to } : null);
+    viewingPly = clamped;
+    renderMoves();
+    showSeekRow(true);
+    setStatus(clamped === 0
+      ? 'Viewing the start position. Tap Latest to return.'
+      : `Viewing move ${clamped} of ${history.length}. Tap Latest to return.`);
+  }
+
+  function isViewing(): boolean {
+    return viewingPly !== null;
+  }
+
+  function showSeekRow(visible: boolean): void {
+    if (!seekRow) return;
+    seekRow.style.display = visible ? '' : 'none';
+  }
+
   function renderMoves(): void {
-    const hist = game.history({ verbose: true });
+    const hist = historyVerbose();
     if (hist.length === 0) {
       moveList.textContent = '—';
       return;
     }
     moveList.textContent = '';
     for (let i = 0; i < hist.length; i += 2) {
+      const plyIndex = i / 2 + 1;
       moveList.append(
-        el('span', { class: 'ply' },
-          el('span', { class: 'num' }, `${i / 2 + 1}.`),
+        el('button', {
+          class: `ply${viewingPly !== null && plyIndex <= viewingPly ? ' current' : ''}`,
+          onclick: () => showPly(plyIndex === hist.length ? null : plyIndex),
+        },
+          el('span', { class: 'num' }, `${plyIndex}.`),
           ` ${hist[i].san}${hist[i + 1] ? ' ' + hist[i + 1].san : ''}`)
       );
     }
@@ -291,6 +348,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     controls.textContent = '';
     controls.append(
       moveList,
+      seekRow,
       el('div', { class: 'btn-row', style: 'margin-top:8px' },
         el('button', { onclick: () => resign() }, 'Resign'),
         allowHelpers ? el('button', { onclick: () => void hint() }, 'Hint') : null,
@@ -415,6 +473,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     board.setLastMove(null);
     board.setInteractive(false);
     board.deselect();
+    viewingPly = null;
     renderMoves();
     controlsInGame(!opts?.ladder && !settings.strictMode);
     setStatus('Loading engine…');
@@ -461,6 +520,11 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     const move = game.move({ from: mv.from, to: mv.to, promotion: mv.promotion ?? 'q' });
     if (!move) return false;
     board.setLastMove({ from: mv.from, to: mv.to });
+    if (isViewing()) {
+      viewingPly = null;
+      document.body.classList.remove('viewing');
+      showSeekRow(false);
+    }
     board.render();
     renderMoves();
     play(move.captured ? 'capture' : 'move');
@@ -509,6 +573,9 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       ? { result: forced, termination: termination ?? 'resignation' }
       : resultFromGameOver();
     board.setInteractive(false);
+    board.clearPreview();
+    viewingPly = null;
+    showSeekRow(false);
     engine.cancelSearch();
     const wasLadder = mode === 'ladder';
     gameGeneration++;
@@ -603,7 +670,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
 
   // ---------- helpers ----------
   async function hint(): Promise<void> {
-    if (thinking || game.turn() !== playerColor) return;
+    if (thinking || isViewing() || game.turn() !== playerColor) return;
     const generation = gameGeneration;
     const position = game.fen();
     thinking = true;
@@ -625,7 +692,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   }
 
   function takeback(): void {
-    if (thinking || game.history().length === 0) return;
+    if (thinking || isViewing() || game.history().length === 0) return;
     engine.cancelSearch();
     if (game.turn() === playerColor && game.history().length >= 2) game.undo();
     game.undo();
@@ -738,6 +805,11 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     // The solver plays the side that is to move AFTER the pre-move.
     playerColor = g.turn();
     board.setOrientation(playerColor);
+    if (isViewing()) {
+      viewingPly = null;
+      document.body.classList.remove('viewing');
+      showSeekRow(false);
+    }
     board.setLastMove({ from: oppMove.slice(0, 2), to: oppMove.slice(2, 4) });
     board.setInteractive(true);
     board.render();
