@@ -1,5 +1,4 @@
-/** Types for the direct UCI worker adapter. */
-
+/** Types shared with the engine worker adapter. */
 
 export interface EngineStrengthParams {
   skill: number;

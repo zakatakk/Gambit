@@ -81,10 +81,10 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
     void updateSetting('strictMode', enabled);
   });
 
-  const exportButton = el('button', { onclick: () => void doExport() }, 'Export data (backup file)');
+  const exportButton = el('button', { onclick: () => void doExport() }, 'Export backup');
   const importInput = el('input', { type: 'file', accept: 'application/json', style: 'display:none' }) as HTMLInputElement;
   importInput.addEventListener('change', () => void doImport(importInput));
-  const importButton = el('button', { onclick: () => importInput.click() }, 'Import data');
+  const importButton = el('button', { onclick: () => importInput.click() }, 'Import backup');
   const reassessButtons = (['probe', 'ladder', 'quick'] as const).map((mode) =>
     el('button', { onclick: () => doReassess(mode) },
       mode === 'probe' ? 'Re-assess · puzzles + games' : mode === 'ladder' ? 'Re-assess · full ladder' : 'Re-assess · quick scan'));

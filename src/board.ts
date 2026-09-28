@@ -84,7 +84,7 @@ export class Board {
         }
         this.squareEls.set(sq, cell);
         this.el.appendChild(cell);
-        cell.addEventListener('pointerdown', (e) => this.onPointerDown(e, sq, e));
+        cell.addEventListener('pointerdown', (e) => this.onPointerDown(e, sq));
         cell.addEventListener('pointermove', (e) => this.onPointerMove(e));
         cell.addEventListener('pointercancel', () => this.cancelDrag());
       }
@@ -129,7 +129,7 @@ export class Board {
       if (!sq || sq === this.dragging.from) {
         this.cancelDrag();
       } else {
-        this.tryDrop(e, sq, e);
+        this.tryDrop(sq);
       }
       this.releasePointer(e);
       return;
@@ -151,7 +151,7 @@ export class Board {
     }
   }
 
-  private onPointerDown(e: PointerEvent, sq: string, _ev: PointerEvent): void {
+  private onPointerDown(e: PointerEvent, sq: string): void {
     if (!this.opts.interactive || this.pendingPromotion) return;
     // Capture the pointer on the BOARD (not the square) so drags keep firing
     // pointermove/pointerup at the board even if the finger leaves the cell.
@@ -200,7 +200,7 @@ export class Board {
     if (this.dragging) this.moveGhost(e);
   }
 
-  private tryDrop(_e: PointerEvent, sq: string, _ev: PointerEvent): void {
+  private tryDrop(sq: string): void {
     if (!this.dragging) return;
     const { from, ghost } = this.dragging;
     this.dragging = null;

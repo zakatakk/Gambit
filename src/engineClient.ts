@@ -48,8 +48,8 @@ export async function fetchProgress(
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Engine download failed (${res.status}): ${url}`);
 
-  // Cache a clone directly as a stream; the engine worker then reuses these bytes
-  // instead of causing another full network download during startup.
+  // Cache the stream directly; the engine worker reuses these bytes instead of
+  // downloading the asset again during startup.
   const cacheWrite = cache?.put(url, res.clone()).catch(() => undefined);
   const total = expectedBytes ?? Number(res.headers.get('content-length') || 0);
   const reader = res.body?.getReader();

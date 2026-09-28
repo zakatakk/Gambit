@@ -1,4 +1,4 @@
-/* Gambit service worker: offline-first for the train. */
+/* Gambit service worker: offline shell + asset caching. */
 const BASE = new URL(self.registration.scope).pathname;
 const CACHE_VERSION = 'v3';
 const SCOPE_ID = BASE.replace(/^\/+|\/+$/g, '').replace(/[^\w-]/g, '_') || 'root';

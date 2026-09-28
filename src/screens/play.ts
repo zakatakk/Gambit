@@ -97,10 +97,10 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   // ---------- DOM ----------
   const boardHost = el('div', { class: 'board-wrap' });
   const opponentLabel = el('span', {}, 'CPU');
-  const modeLabel = el('span', { class: 'sub' }, ' · casual');
+  const modeLabel = el('span', { class: 'sub' });
   const topBar = el('div', { class: 'game-top' },
     el('span', { class: 'vs' }, 'You vs ', opponentLabel),
-    el('span', { class: 'sub' }, modeLabel));
+    modeLabel);
   const statusBar = el('div', { class: 'status-bar' }, '');
   const moveList = el('div', { class: 'move-list' }, '—');
   const controls = el('div', { class: 'section' });
@@ -391,7 +391,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       : resultFromGameOver();
     board.setInteractive(false);
     engine.cancelSearch();
-    const wasLadderMode = mode === 'ladder';
+    const wasLadder = mode === 'ladder';
     gameGeneration++;
     thinking = false;
     mode = 'idle';
@@ -408,17 +408,16 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       .join(' ');
     const rec: GameRecord = {
       ts: Date.now(),
-      type: wasLadderMode ? 'assessment' : 'cpu',
+      type: wasLadder ? 'assessment' : 'cpu',
       color: playerColor,
       result: r.result,
       movesUci,
       startFen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
       opponentRating: oppRating,
       opponentTier: engine.tier ?? activeEngineTier,
-      rated: assessed && !wasLadderMode,
+      rated: assessed && !wasLadder,
       termination: r.termination,
     };
-    const wasLadder = rec.type === 'assessment';
     const wasAssessed = assessed;
     const finishedGameGeneration = gameGeneration;
     void (async () => {
@@ -431,8 +430,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       }
       if (finishedGameGeneration !== gameGeneration || !container.isConnected) return;
       if (wasLadder) {
-        // Ladder games are scored as one batched rating period in
-        // onLadderGameFinished() — no sequential update here.
+        // Ladder games are batched into one rating period in onLadderGameFinished().
       } else if (wasAssessed) {
         try {
           const { before, after } = await applyGameResult({
@@ -546,12 +544,11 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
         toast('Puzzle bundle missing — run: npm run puzzles');
         return;
       }
-      // Probe: 8 puzzles around 1200-1800 to bracket the prior.
+      // Probe: 8 puzzles around 1200–1800 to bracket the prior.
       const band = all.filter((p) => p.rating >= 1100 && p.rating <= 1900);
       assess.puzzles = shuffle(band.length >= 8 ? band : all)
         .slice(0, 8)
         .map((puzzle) => ({ ...puzzle }));
-      mode = 'probe';
       probeIndex = 0;
       opponentLabel.textContent = 'Assessment';
       modeLabel.textContent = ' · puzzle probe 1/8';

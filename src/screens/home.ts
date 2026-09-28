@@ -1,4 +1,4 @@
-/** Home: editorial masthead + rating + assessment entry. */
+/** Home: rating overview, assessment entry, engine download. */
 import { getProfile, getSettings, countGames, getAttempts, updateSettings } from '../db';
 import { engine } from '../engineClient';
 import { el, modal, toast } from '../ui';
@@ -63,7 +63,6 @@ function modeTile(title: string, detail: string, onTap: () => void): HTMLElement
 }
 
 function startAssessment(app: App, mode: 'probe' | 'ladder' | 'quick'): void {
-  play('success');
   app.navigate('play', { assessment: true, mode });
 }
 
@@ -83,7 +82,7 @@ async function upgradeEngine(app: App, container: HTMLElement): Promise<void> {
     await updateSettings({ engineTier: 'full' });
     if (!container.isConnected) return;
     play('success');
-    toast('Full engine ready — strongest play unlocked.');
+    toast('Full engine ready.');
   } catch (error) {
     if (container.isConnected) toast(`Download failed: ${(error as Error).message}`);
   } finally {

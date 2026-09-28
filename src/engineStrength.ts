@@ -3,7 +3,8 @@
  * Calibrated to Lichess community-verified anchors: level 1 ≈ 800, 2 ≈ 1000,
  * 3 ≈ 1200, 4 ≈ 1400, 5 ≈ 1500, 6 ≈ 1900, 7 ≈ 2300, 8 ≈ 2800+.
  * Implemented as: skill 0-20 with UCI_LimitStrength + Elo slider (1500-2850)
- * for the top band, plus move-randomization so low ratings feel human.
+ * for the top band, plus move randomization so weak levels play plausibly
+ * human moves.
  */
 
 export interface EngineStrength {
@@ -24,33 +25,31 @@ export function ratingToStrength(targetRating: number, tier: 'lite' | 'full'): E
   const cap = tier === 'lite' ? 2350 : 2900;
   const clamped = Math.min(r, cap);
 
-  // Below ~1500: low skill + heavy randomization (human-feeling weaker play).
-  // 1500-2000: skill ramps 3->9, randomization tapers.
-  // 2000-2350: skill 9->15, Elo limit 2000->2350.
-  // 2350+: full strength, Elo limit up to 2850 (full tier only).
+  // Below ~1500: low skill, heavy randomization. 1500–2000: skill ramps 3→9.
+  // 2000–2350: skill 9→15 with an Elo limit. Above that: full strength (full tier).
   let skill: number;
   let limitedElo: number | null = null;
   let blunderChance: number;
   let randomCp: number;
 
   if (clamped < 1500) {
-    skill = Math.max(0, Math.round((clamped - 700) / 400)); // 0..2
-    blunderChance = 0.55 - ((clamped - 700) / 800) * 0.25; // .55 -> .30
-    randomCp = Math.round(140 - ((clamped - 700) / 800) * 60); // 140 -> 80
+    skill = Math.max(0, Math.round((clamped - 700) / 400));
+    blunderChance = 0.55 - ((clamped - 700) / 800) * 0.25;
+    randomCp = Math.round(140 - ((clamped - 700) / 800) * 60);
   } else if (clamped < 2000) {
-    skill = Math.round(3 + ((clamped - 1500) / 500) * 6); // 3..9
-    blunderChance = 0.25 - ((clamped - 1500) / 500) * 0.20; // .25 -> .05
-    randomCp = Math.round(70 - ((clamped - 1500) / 500) * 30); // 70 -> 40
+    skill = Math.round(3 + ((clamped - 1500) / 500) * 6);
+    blunderChance = 0.25 - ((clamped - 1500) / 500) * 0.20;
+    randomCp = Math.round(70 - ((clamped - 1500) / 500) * 30);
   } else if (clamped < 2350) {
-    skill = Math.round(9 + ((clamped - 2000) / 350) * 6); // 9..15
+    skill = Math.round(9 + ((clamped - 2000) / 350) * 6);
     blunderChance = 0.05 - ((clamped - 2000) / 350) * 0.03;
     randomCp = Math.round(35 - ((clamped - 2000) / 350) * 20);
     limitedElo = Math.round(2000 + ((clamped - 2000) / 350) * 350);
   } else {
-    skill = 16 + Math.round(((clamped - 2350) / 450) * 4); // 16..20 (2800 = full)
+    skill = 16 + Math.round(((clamped - 2350) / 450) * 4);
     blunderChance = 0;
     randomCp = 0;
-    limitedElo = Math.round(2350 + ((clamped - 2350) / 450) * 500); // 2350..2850
+    limitedElo = Math.round(2350 + ((clamped - 2350) / 450) * 500); // 2350–2850
   }
 
   return {

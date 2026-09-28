@@ -103,7 +103,7 @@ export async function mountPuzzles(container: HTMLElement, _app: App): Promise<v
       if (current && !recordedCurrent) seen.add(current.id);
       const puzzle = pickPuzzle(all, profileCache.rating, seen);
       if (!puzzle) {
-        setFeedback('No puzzles left in range — you solved them all!', 'good');
+        setFeedback('No puzzles left in your rating range.', 'good');
         return;
       }
 
