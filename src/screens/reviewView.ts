@@ -9,12 +9,18 @@ import { deepReview, type DeepReview, type PlyReview } from '../review';
 import { engine } from '../engineClient';
 import { CLS_COLORS, CLS_ORDER, mateScoreValue, winPct } from '../reviewScoring';
 import { el, modal } from '../ui';
-import { saveReview, getReview } from '../db';
+import { saveReview, getReview, getSettings } from '../db';
+import { applyBoardTheme, applyPieceSet } from '../pieces';
 import type { GameRecord } from '../types';
 
 export async function openReview(rec: GameRecord, isCurrent: () => boolean = () => true): Promise<void> {
-  const cached = await getReview(rec.ts).catch(() => null);
+  const [cached, appearance] = await Promise.all([
+    getReview(rec.ts).catch(() => null),
+    getSettings(),
+  ]);
   if (!isCurrent()) return;
+  applyPieceSet(appearance.pieceSet);
+  applyBoardTheme(appearance.boardTheme);
   if (cached) {
     renderReview(rec, cached as DeepReview);
     return;

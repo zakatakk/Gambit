@@ -2,10 +2,22 @@
 import { getSettings, updateSettings, getProfile, updateProfile, exportData, importData, clearAll, getSavedAssessment } from '../db';
 import { engine } from '../engineClient';
 import { applyTheme } from '../theme';
+import { applyBoardTheme, applyPieceSet, BOARD_THEMES, PIECE_SETS } from '../pieces';
 import { setSoundsEnabled, play } from '../sounds';
 import { el, toast, switchControl, modal } from '../ui';
 import type { App } from '../app';
 import type { Settings, EngineTier } from '../types';
+
+const PIECE_SET_LABELS: Record<string, string> = {
+  cburnett: 'Classic',
+  staunty: 'Staunton',
+  merida: 'Merida',
+};
+const BOARD_THEME_LABELS: Record<string, string> = {
+  walnut: 'Walnut',
+  marine: 'Marine',
+  slate: 'Slate',
+};
 
 export async function mountSettings(container: HTMLElement, app: App): Promise<void> {
   const [settings, profile] = await Promise.all([getSettings(), getProfile()]);
@@ -74,6 +86,20 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
     void updateSetting('theme', themeSelect.value as Settings['theme'], applyTheme);
   });
 
+  const pieceSelect = el('select', {},
+    ...PIECE_SETS.map((set) => el('option', { value: set }, PIECE_SET_LABELS[set] ?? set))) as HTMLSelectElement;
+  pieceSelect.value = settings.pieceSet;
+  pieceSelect.addEventListener('change', () => {
+    void updateSetting('pieceSet', pieceSelect.value as Settings['pieceSet'], applyPieceSet);
+  });
+
+  const boardSelect = el('select', {},
+    ...BOARD_THEMES.map((theme) => el('option', { value: theme }, BOARD_THEME_LABELS[theme] ?? theme))) as HTMLSelectElement;
+  boardSelect.value = settings.boardTheme;
+  boardSelect.addEventListener('change', () => {
+    void updateSetting('boardTheme', boardSelect.value as Settings['boardTheme'], applyBoardTheme);
+  });
+
   const soundSwitch = switchControl(settings.sounds, (enabled) => {
     void updateSetting('sounds', enabled, setSoundsEnabled).then(() => { if (enabled && container.isConnected) play('move'); });
   });
@@ -94,6 +120,8 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
     el('div', { class: 'section' },
       el('h2', {}, 'Appearance'),
       el('div', { class: 'row' }, el('span', {}, 'Theme'), themeSelect),
+      el('div', { class: 'row' }, el('span', {}, 'Pieces'), pieceSelect),
+      el('div', { class: 'row' }, el('span', {}, 'Board'), boardSelect),
       el('div', { class: 'row' }, el('span', {}, 'Sounds'), soundSwitch)),
     el('div', { class: 'section' },
       el('h2', {}, 'Difficulty'),
@@ -118,7 +146,7 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       el('p', { class: 'tiny', style: 'margin:0' }, 'Glicko-2 rating · Stockfish engine (GPL) · Lichess puzzles (CC0)'))
   );
 
-  async function updateSetting<K extends 'theme' | 'sounds' | 'strictMode'>(
+  async function updateSetting<K extends 'theme' | 'sounds' | 'strictMode' | 'pieceSet' | 'boardTheme'>(
     key: K,
     value: Settings[K],
     apply?: (value: Settings[K]) => void
@@ -156,6 +184,8 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       if (!container.isConnected) return;
       const importedSettings = await getSettings();
       applyTheme(importedSettings.theme);
+      applyPieceSet(importedSettings.pieceSet);
+      applyBoardTheme(importedSettings.boardTheme);
       setSoundsEnabled(importedSettings.sounds);
       toast('Data imported.');
       await app.refreshRating();
@@ -187,6 +217,8 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       await clearAll();
       if (!container.isConnected) return;
       applyTheme('system');
+      applyPieceSet('cburnett');
+      applyBoardTheme('walnut');
       setSoundsEnabled(true);
       toast('Everything erased.');
       await app.refreshRating();

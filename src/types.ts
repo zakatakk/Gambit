@@ -56,12 +56,17 @@ export interface PuzzleItem {
   themes: string[];
 }
 
+export type PieceSet = 'cburnett' | 'staunty' | 'merida';
+export type BoardTheme = 'walnut' | 'marine' | 'slate';
+
 export interface Settings {
   theme: 'system' | 'light' | 'dark';
   sounds: boolean;
   strictMode: boolean;
   engineTier: EngineTier;
   lastOpponentRating?: number;
+  pieceSet: PieceSet;
+  boardTheme: BoardTheme;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -69,4 +74,6 @@ export const DEFAULT_SETTINGS: Settings = {
   sounds: true,
   strictMode: false,
   engineTier: 'lite',
+  pieceSet: 'cburnett',
+  boardTheme: 'walnut',
 };

@@ -2,6 +2,7 @@
 import { applyTheme, watchSystemTheme } from './theme';
 import { setSoundsEnabled, primeAudio } from './sounds';
 import { getSettings, getProfile } from './db';
+import { applyBoardTheme, applyPieceSet } from './pieces';
 import { el, toast } from './ui';
 import { mountHome } from './screens/home';
 import { mountPlay } from './screens/play';
@@ -94,6 +95,8 @@ export function bootApp(): void {
     try {
       const settings = await getSettings();
       applyTheme(settings.theme);
+      applyPieceSet(settings.pieceSet);
+      applyBoardTheme(settings.boardTheme);
       setSoundsEnabled(settings.sounds);
       watchSystemTheme(() => {
         void getSettings().then((latest) => applyTheme(latest.theme));

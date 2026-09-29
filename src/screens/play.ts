@@ -6,6 +6,7 @@ import { ratingToStrength, ASSESSMENT_LEVELS } from '../engineStrength';
 import { applyGameResult, setProfileRating } from '../ratingOps';
 import { ratePeriod } from '../glicko2';
 import { getProfile, getSettings, updateSettings, addGame, updateGame, updateProfile, getSavedAssessment, saveSavedAssessment } from '../db';
+import { applyBoardTheme, applyPieceSet } from '../pieces';
 import { play } from '../sounds';
 import { el, modal, toast } from '../ui';
 import type { App } from '../app';
@@ -50,6 +51,8 @@ function shuffle<T>(arr: T[]): T[] {
 export async function mountPlay(container: HTMLElement, app: App, params: PlayParams): Promise<void> {
   const settings = await getSettings();
   if (!container.isConnected) return;
+  applyPieceSet(settings.pieceSet);
+  applyBoardTheme(settings.boardTheme);
   let activeEngineTier: EngineTier = settings.engineTier === 'full' ? 'full' : 'lite';
   let assessed = (await getProfile()).assessed;
   if (!container.isConnected) return;

@@ -327,6 +327,8 @@ function isSettings(value: unknown): value is Partial<Settings> {
   if (value.sounds !== undefined && typeof value.sounds !== 'boolean') return false;
   if (value.strictMode !== undefined && typeof value.strictMode !== 'boolean') return false;
   if (value.engineTier !== undefined && !['lite', 'full'].includes(String(value.engineTier))) return false;
+  if (value.pieceSet !== undefined && !['cburnett', 'staunty', 'merida'].includes(String(value.pieceSet))) return false;
+  if (value.boardTheme !== undefined && !['walnut', 'marine', 'slate'].includes(String(value.boardTheme))) return false;
   return value.lastOpponentRating === undefined || finiteNumber(value.lastOpponentRating);
 }
 

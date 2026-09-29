@@ -3,7 +3,8 @@ import { Chess } from 'chess.js';
 import { Board } from '../board';
 import { loadPuzzles, pickPuzzle } from '../puzzles';
 import { applyPuzzleResult } from '../ratingOps';
-import { getAttempts, getProfile } from '../db';
+import { getAttempts, getProfile, getSettings } from '../db';
+import { applyBoardTheme, applyPieceSet } from '../pieces';
 import { play } from '../sounds';
 import { el } from '../ui';
 import type { App } from '../app';
@@ -21,8 +22,10 @@ export async function mountPuzzles(container: HTMLElement, _app: App): Promise<v
   const solutionLine = el('p', { class: 'muted center', style: 'margin:4px 0' }, '');
   const metaBar = el('div', { class: 'puzzle-meta' });
   const controls = el('div', { class: 'section' });
-  const attempts = await getAttempts();
+  const [attempts, appearance] = await Promise.all([getAttempts(), getSettings()]);
   if (!container.isConnected) return;
+  applyPieceSet(appearance.pieceSet);
+  applyBoardTheme(appearance.boardTheme);
 
   const seen = new Set(attempts.map((attempt) => attempt.id));
   const game = new Chess();

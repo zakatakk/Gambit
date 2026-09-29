@@ -50,6 +50,25 @@ html[data-theme='dark'] {
   --sel: rgba(201, 107, 80, 0.35);
 }
 
+/* Board color themes (user choice) override both light and dark paper palettes.
+ * Highlight colors still follow the theme via --last-move/--sel. */
+html[data-board='marine'] {
+  --board-light: #dee3e6;
+  --board-dark: #788a94;
+}
+html[data-board='slate'] {
+  --board-light: #c9cdd2;
+  --board-dark: #5c6873;
+}
+html[data-theme='dark'][data-board='marine'] {
+  --board-light: #97a7b2;
+  --board-dark: #4b5a64;
+}
+html[data-theme='dark'][data-board='slate'] {
+  --board-light: #8f949b;
+  --board-dark: #43484e;
+}
+
 * { box-sizing: border-box; }
 html, body { min-height: 100%; }
 html { background: var(--paper); }
