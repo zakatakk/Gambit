@@ -110,8 +110,8 @@ body {
   width: min(100%, var(--content-max));
   height: 100%;
   margin: 0 auto;
-  /* Side padding clears the fixed menu handle at the left edge. */
-  padding: var(--safe-top) 14px 24px;
+  /* Top padding clears the fixed menu handle in the corner. */
+  padding: calc(var(--safe-top) + 34px) 14px 24px;
   overflow-y: auto;
   overscroll-behavior: none; /* no rubber-banding inside the frame either */
   overflow-x: clip;
@@ -231,17 +231,13 @@ select, input[type='number'] {
 .switch input:checked + .track { background: var(--accent); }
 .switch input:checked + .track::after { transform: translateX(18px); }
 
-/* ---------- nav: slide-in sidebar + edge handle (replaces the bottom bar) ---------- */
+/* ---------- nav: slide-in sidebar + corner handle (replaces the bottom bar) ---------- */
 .menu-handle {
-  position: fixed; top: 50%; left: 0; transform: translateY(-50%); z-index: 60;
-  border: 1px solid var(--rule-2); border-left: none;
-  border-radius: 0 6px 6px 0;
-  background: var(--panel); color: var(--ink-3);
-  font-family: var(--sans); font-size: 0.66rem; font-weight: 600;
-  letter-spacing: 0.14em; text-transform: uppercase;
-  writing-mode: vertical-rl; text-orientation: mixed;
-  padding: 14px 4px;
+  position: fixed; top: calc(6px + var(--safe-top)); left: 10px; z-index: 60;
+  border: none; background: none; color: var(--ink-3);
+  padding: 6px;
 }
+.menu-handle svg { width: 22px; height: 22px; display: block; }
 .menu-handle:active { color: var(--accent); }
 nav.sidebar {
   position: fixed; top: 0; bottom: 0; left: 0; z-index: 70;

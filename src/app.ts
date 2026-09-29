@@ -86,7 +86,7 @@ export function bootApp(): void {
     'aria-label': 'Open menu',
     'aria-expanded': 'false',
     onclick: () => setSidebar(document.body.classList.toggle('sidebar-open')),
-  }, 'Menu');
+  }, menuIcon());
   document.body.append(handle, sidebar, scrim);
 
   function setSidebar(open: boolean): void {
@@ -133,6 +133,26 @@ export function bootApp(): void {
       toast(`Startup warning: ${message}`);
     }
   })();
+}
+
+/** Hamburger icon for the sidebar handle (drawn inline: no glyph fonts). */
+function menuIcon(): SVGSVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  for (const y of [6, 12, 18]) {
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', '3');
+    line.setAttribute('y1', String(y));
+    line.setAttribute('x2', '21');
+    line.setAttribute('y2', String(y));
+    line.setAttribute('stroke', 'currentColor');
+    line.setAttribute('stroke-width', '2');
+    line.setAttribute('stroke-linecap', 'round');
+    svg.appendChild(line);
+  }
+  return svg;
 }
 
 export { el };
