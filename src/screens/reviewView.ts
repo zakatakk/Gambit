@@ -111,7 +111,7 @@ function renderReview(rec: GameRecord, review: DeepReview): void {
       bestBadge.append(el('button', {
         class: 'small',
         onclick: () => showPly(reviewedPly.ply - 1),
-      }, '◀ see position before'));
+      }, 'See position before'));
     }
   }
 

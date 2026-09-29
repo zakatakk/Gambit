@@ -199,17 +199,11 @@ nav.tabs {
 nav.tabs button {
   flex: 1 1 0; min-width: 0; max-width: none;
   border: none; background: none; color: var(--ink-3);
-  padding: 8px 1px 6px; font-size: clamp(0.52rem, 2.5vw, 0.72rem); font-weight: 600;
+  padding: 8px 1px 6px; font-size: clamp(0.72rem, 2.5vw, 0.85rem); font-weight: 600;
   letter-spacing: clamp(0.01em, 0.15vw, 0.06em); text-transform: uppercase;
   white-space: nowrap;
   border-top: 2px solid transparent;
   border-radius: 0;
-}
-nav.tabs button .ico { margin-right: 2px; }
-nav.tabs button .settings-icon {
-  width: 1em;
-  height: 1em;
-  vertical-align: -0.15em;
 }
 nav.tabs button.active { color: var(--accent); border-top-color: var(--accent); }
 nav.tabs button:active { color: var(--ink); }

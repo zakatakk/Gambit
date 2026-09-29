@@ -95,7 +95,7 @@ export async function mountStats(container: HTMLElement, _app: App): Promise<voi
       el('span', {},
         el('b', {}, res), ` vs CPU ${Math.round(g.opponentRating)}`),
       el('span', { class: 'muted' }, new Date(g.ts).toLocaleDateString()),
-      analysed ? el('span', { class: 'chip' }, 'analysed') : el('span', { class: 'chip' }, 'analyse ▸')
+      analysed ? el('span', { class: 'chip' }, 'analysed') : el('span', { class: 'chip' }, 'Analyse')
     );
   }
 

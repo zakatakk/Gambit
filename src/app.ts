@@ -22,11 +22,11 @@ let activeTab: AppTab = 'home';
 let renderVersion = 0;
 
 const TABS = [
-  { id: 'home', label: 'Home', ico: '⌂' },
-  { id: 'play', label: 'Play', ico: '♞' },
-  { id: 'puzzles', label: 'Puzzles', ico: '★' },
-  { id: 'stats', label: 'Stats', ico: '▲' },
-  { id: 'settings', label: 'Settings', ico: 'settings' },
+  { id: 'home', label: 'Home' },
+  { id: 'play', label: 'Play' },
+  { id: 'puzzles', label: 'Puzzles' },
+  { id: 'stats', label: 'Stats' },
+  { id: 'settings', label: 'Settings' },
 ] as const;
 
 async function render(app: App, params?: Record<string, unknown>): Promise<void> {
@@ -71,8 +71,7 @@ export function bootApp(): void {
     const button = el(
       'button',
       { 'data-tab': tab.id, onclick: () => { primeAudio(); app.navigate(tab.id); } },
-      tab.ico === 'settings' ? settingsIcon() : el('span', { class: 'ico' }, tab.ico),
-      el('span', {}, tab.label)
+      tab.label
     );
     nav.appendChild(button);
   }
@@ -109,24 +108,6 @@ export function bootApp(): void {
       toast(`Startup warning: ${message}`);
     }
   })();
-}
-
-function settingsIcon(): SVGSVGElement {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('class', 'ico settings-icon');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('aria-hidden', 'true');
-  svg.setAttribute('focusable', 'false');
-
-  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', 'M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Zm9 4.5a7.7 7.7 0 0 0-.1-1.3l1.5-1.2-1.5-2.7-1.8.7a8 8 0 0 0-2.2-1.3L16.6 5h-3.1l-.4 1.9a8 8 0 0 0-2.2 1.3l-1.8-.7-1.5 2.7 1.5 1.2a7.7 7.7 0 0 0 0 2.6l-1.5 1.2 1.5 2.7 1.8-.7a8 8 0 0 0 2.2 1.3l.4 1.9h3.1l.4-1.9a8 8 0 0 0 2.2-1.3l1.8.7 1.5-2.7-1.5-1.2c.1-.4.1-.9.1-1.3Z');
-  path.setAttribute('fill', 'none');
-  path.setAttribute('stroke', 'currentColor');
-  path.setAttribute('stroke-width', '1.8');
-  path.setAttribute('stroke-linecap', 'round');
-  path.setAttribute('stroke-linejoin', 'round');
-  svg.append(path);
-  return svg;
 }
 
 export { el };

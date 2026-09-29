@@ -1,4 +1,4 @@
-# Gambit ♟️
+# Gambit
 
 An offline-first chess PWA for iPhone: a **rating you can trust**, CPU games at your level, and puzzles that fit — all on one unified Lichess-scale rating.
 

@@ -220,10 +220,10 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   const moveList = el('div', { class: 'move-list' }, '—');
   const controls = el('div', { class: 'section' });
   const seekRow = el('div', { class: 'seek-row btn-row' },
-    el('button', { onclick: () => showPly(0) }, '⏮ Start'),
-    el('button', { onclick: () => showPly((viewingPly ?? historyVerbose().length) - 1) }, '◀ Prev'),
-    el('button', { onclick: () => showPly((viewingPly ?? historyVerbose().length - 1) + 1) }, 'Next ▶'),
-    el('button', { class: 'latest', onclick: () => showPly(null) }, 'Latest ⏭'));
+    el('button', { onclick: () => showPly(0) }, 'Start'),
+    el('button', { onclick: () => showPly((viewingPly ?? historyVerbose().length) - 1) }, 'Prev'),
+    el('button', { onclick: () => showPly((viewingPly ?? historyVerbose().length - 1) + 1) }, 'Next'),
+    el('button', { class: 'latest', onclick: () => showPly(null) }, 'Latest'));
   const board = new Board(boardHost, game, {
     orientation: 'w',
     interactive: false,
