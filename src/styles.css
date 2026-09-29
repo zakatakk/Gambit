@@ -227,6 +227,11 @@ nav.tabs button {
 nav.tabs button.active { color: var(--accent); border-top-color: var(--accent); }
 nav.tabs button:active { color: var(--ink); }
 
+/* Settings example board: a live preview of the chosen pieces + palette. */
+.preview-wrap { --board-size: min(62vw, 230px); padding: 12px var(--page-gutter) 4px; }
+.preview-wrap .board { touch-action: auto; }
+.preview-wrap .coord { display: none; }
+
 /* ---------- board ---------- */
 .board-wrap { display: flex; justify-content: center; width: 100%; padding: 10px var(--page-gutter) 6px; }
 .board {

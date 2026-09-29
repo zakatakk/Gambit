@@ -1,4 +1,6 @@
 /** Settings: preferences, engine tier, difficulty override, and data management. */
+import { Chess } from 'chess.js';
+import { Board } from '../board';
 import { getSettings, updateSettings, getProfile, updateProfile, exportData, importData, clearAll, getSavedAssessment } from '../db';
 import { engine } from '../engineClient';
 import { applyTheme } from '../theme';
@@ -19,9 +21,24 @@ const BOARD_THEME_LABELS: Record<string, string> = {
   slate: 'Slate',
 };
 
+/** Italian Game, after 3.Nf3 — shows all six piece types in both colors. */
+const PREVIEW_FEN = 'r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 1 3';
+
 export async function mountSettings(container: HTMLElement, app: App): Promise<void> {
   const [settings, profile] = await Promise.all([getSettings(), getProfile()]);
   if (!container.isConnected) return;
+  applyPieceSet(settings.pieceSet);
+  applyBoardTheme(settings.boardTheme);
+
+  // Example board: the same square/piece markup as the real board, so the
+  // preview tracks the chosen pieces and palette exactly.
+  const preview = new Board(el('div', { class: 'board-wrap preview-wrap' }), new Chess(PREVIEW_FEN), {
+    orientation: 'w',
+    interactive: false,
+    onMove: () => {},
+  });
+  preview.setLastMove({ from: 'g1', to: 'f3' });
+  preview.render();
 
   const opponentSlider = el('input', { type: 'range', min: '600', max: '2900', step: '25' }) as HTMLInputElement;
   opponentSlider.value = String(Math.max(600, Math.min(2900, Math.round(settings.lastOpponentRating ?? profile.rating))));
@@ -90,7 +107,10 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
     ...PIECE_SETS.map((set) => el('option', { value: set }, PIECE_SET_LABELS[set] ?? set))) as HTMLSelectElement;
   pieceSelect.value = settings.pieceSet;
   pieceSelect.addEventListener('change', () => {
-    void updateSetting('pieceSet', pieceSelect.value as Settings['pieceSet'], applyPieceSet);
+    void updateSetting('pieceSet', pieceSelect.value as Settings['pieceSet'], (value) => {
+      applyPieceSet(value);
+      preview.render();
+    });
   });
 
   const boardSelect = el('select', {},
@@ -122,6 +142,7 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       el('div', { class: 'row' }, el('span', {}, 'Theme'), themeSelect),
       el('div', { class: 'row' }, el('span', {}, 'Pieces'), pieceSelect),
       el('div', { class: 'row' }, el('span', {}, 'Board'), boardSelect),
+      preview.el.parentElement as HTMLElement,
       el('div', { class: 'row' }, el('span', {}, 'Sounds'), soundSwitch)),
     el('div', { class: 'section' },
       el('h2', {}, 'Difficulty'),
