@@ -1,5 +1,5 @@
 /** App shell: bottom-tab navigation and screen mounting. */
-import { applyAccent, applyTheme, watchSystemTheme } from './theme';
+import { applyAccent, applySkin, applyTheme, watchSystemTheme } from './theme';
 import { setSoundsEnabled, primeAudio } from './sounds';
 import { getSettings, getProfile } from './db';
 import { applyBoardTheme, applyPieceSet } from './pieces';
@@ -116,6 +116,7 @@ export function bootApp(): void {
     try {
       const settings = await getSettings();
       applyTheme(settings.theme);
+      applySkin(settings.skin);
       applyAccent(settings.accent);
       applyPieceSet(settings.pieceSet);
       applyBoardTheme(settings.boardTheme);

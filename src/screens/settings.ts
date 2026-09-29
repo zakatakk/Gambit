@@ -3,7 +3,7 @@ import { Chess } from 'chess.js';
 import { Board } from '../board';
 import { getSettings, updateSettings, getProfile, updateProfile, exportData, importData, clearAll, getSavedAssessment } from '../db';
 import { engine } from '../engineClient';
-import { ACCENTS, applyAccent, applyTheme } from '../theme';
+import { ACCENTS, SKINS, applyAccent, applySkin, applyTheme } from '../theme';
 import { applyBoardTheme, applyPieceSet, BOARD_THEMES, PIECE_SETS } from '../pieces';
 import { setSoundsEnabled, play } from '../sounds';
 import { el, toast, switchControl, modal } from '../ui';
@@ -94,6 +94,13 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
     })();
   });
 
+  const styleSelect = el('select', {},
+    ...SKINS.map((skin) => el('option', { value: skin.id }, skin.label))) as HTMLSelectElement;
+  styleSelect.value = settings.skin;
+  styleSelect.addEventListener('change', () => {
+    void updateSetting('skin', styleSelect.value as Settings['skin'], applySkin);
+  });
+
   const themeSelect = el('select', {},
     el('option', { value: 'system' }, 'Follow system'),
     el('option', { value: 'dark' }, 'Dark'),
@@ -114,7 +121,8 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
   });
 
   const boardSelect = el('select', {},
-    ...BOARD_THEMES.map((theme) => el('option', { value: theme }, BOARD_THEME_LABELS[theme] ?? theme))) as HTMLSelectElement;
+    el('option', { value: 'auto' }, 'Style default'),
+    ...BOARD_THEMES.filter((theme) => theme !== 'auto').map((theme) => el('option', { value: theme }, BOARD_THEME_LABELS[theme] ?? theme))) as HTMLSelectElement;
   boardSelect.value = settings.boardTheme;
   boardSelect.addEventListener('change', () => {
     void updateSetting('boardTheme', boardSelect.value as Settings['boardTheme'], applyBoardTheme);
@@ -153,10 +161,11 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
   container.append(
     el('div', { class: 'section' },
       el('h2', {}, 'Appearance'),
+      el('div', { class: 'row' }, el('span', {}, 'Style'), styleSelect),
       el('div', { class: 'row' }, el('span', {}, 'Theme'), themeSelect),
+      el('div', { class: 'row' }, el('span', {}, 'Accent'), accentSelect),
       el('div', { class: 'row' }, el('span', {}, 'Pieces'), pieceSelect),
       el('div', { class: 'row' }, el('span', {}, 'Board'), boardSelect),
-      el('div', { class: 'row' }, el('span', {}, 'Accent'), accentSelect),
       preview.el.parentElement as HTMLElement,
       el('div', { class: 'row' }, el('span', {}, 'Sounds'), soundSwitch)),
     el('div', { class: 'section' },
@@ -184,7 +193,7 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       el('p', { class: 'tiny', style: 'margin:0' }, 'Glicko-2 rating · Stockfish engine (GPL) · Lichess puzzles (CC0)'))
   );
 
-  async function updateSetting<K extends 'theme' | 'sounds' | 'strictMode' | 'pieceSet' | 'boardTheme' | 'accent' | 'autoQueen' | 'showCoords'>(
+  async function updateSetting<K extends 'theme' | 'sounds' | 'strictMode' | 'pieceSet' | 'boardTheme' | 'skin' | 'accent' | 'autoQueen' | 'showCoords'>(
     key: K,
     value: Settings[K],
     apply?: (value: Settings[K]) => void
@@ -222,6 +231,7 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       if (!container.isConnected) return;
       const importedSettings = await getSettings();
       applyTheme(importedSettings.theme);
+      applySkin(importedSettings.skin);
       applyAccent(importedSettings.accent);
       applyPieceSet(importedSettings.pieceSet);
       applyBoardTheme(importedSettings.boardTheme);
@@ -257,6 +267,7 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       await clearAll();
       if (!container.isConnected) return;
       applyTheme('system');
+      applySkin('classic');
       applyAccent('oxblood');
       applyPieceSet('cburnett');
       applyBoardTheme('walnut');

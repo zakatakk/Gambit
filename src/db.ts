@@ -344,11 +344,12 @@ function isProfile(value: unknown): value is Profile {
 function isSettings(value: unknown): value is Partial<Settings> {
   if (!isObject(value)) return false;
   if (value.theme !== undefined && !['system', 'light', 'dark'].includes(String(value.theme))) return false;
+  if (value.skin !== undefined && !['classic', 'midnight', 'bauhaus', 'lakehouse', 'cyber'].includes(String(value.skin))) return false;
   if (value.sounds !== undefined && typeof value.sounds !== 'boolean') return false;
   if (value.strictMode !== undefined && typeof value.strictMode !== 'boolean') return false;
   if (value.engineTier !== undefined && !['lite', 'full'].includes(String(value.engineTier))) return false;
   if (value.pieceSet !== undefined && !['cburnett', 'staunty', 'merida'].includes(String(value.pieceSet))) return false;
-  if (value.boardTheme !== undefined && !['walnut', 'marine', 'slate'].includes(String(value.boardTheme))) return false;
+  if (value.boardTheme !== undefined && !['auto', 'walnut', 'marine', 'slate'].includes(String(value.boardTheme))) return false;
   if (value.accent !== undefined && !['oxblood', 'forest', 'royal', 'aubergine'].includes(String(value.accent))) return false;
   if (value.autoQueen !== undefined && typeof value.autoQueen !== 'boolean') return false;
   if (value.showCoords !== undefined && typeof value.showCoords !== 'boolean') return false;
