@@ -29,7 +29,11 @@
   --safe-top: max(16px, env(safe-area-inset-top, 0px));
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 
-  --board-size: min(92vw, 470px);
+  /* Board fits the viewport height too, so an in-progress game never needs
+   * to scroll on a phone: clock, captures, status, and move list take the
+   * rest (roughly 400px of chrome). Floor keeps tiny phones playable; idle
+   * menu screens may still scroll, which is fine. */
+  --board-size: min(92vw, 470px, max(240px, calc(100dvh - 400px)));
 }
 html[data-theme='dark'] {
   --paper: #191611;
@@ -106,10 +110,10 @@ body {
   width: min(100%, var(--content-max));
   height: 100%;
   margin: 0 auto;
-  padding: var(--safe-top) 0 24px;
+  /* Side padding clears the fixed menu handle at the left edge. */
+  padding: var(--safe-top) 14px 24px;
   overflow-y: auto;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: none; /* no rubber-banding inside the frame either */
   overflow-x: clip;
 }
 
@@ -354,7 +358,8 @@ body.viewing .status-bar { opacity: 0.55; }
 
 .move-list {
   font-family: var(--mono); font-size: 0.86rem; color: var(--ink-2);
-  max-height: 110px; overflow-y: auto; line-height: 1.7;
+  max-height: 88px; overflow-y: auto; line-height: 1.7;
+  overscroll-behavior: contain;
 }
 .move-list .num { color: var(--ink-3); display: inline-block; min-width: 30px; }
 .move-list .ply { margin-right: 12px; white-space: nowrap; }
