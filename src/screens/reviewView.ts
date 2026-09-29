@@ -22,7 +22,7 @@ export async function openReview(rec: GameRecord, isCurrent: () => boolean = () 
   applyPieceSet(appearance.pieceSet);
   applyBoardTheme(appearance.boardTheme);
   if (cached) {
-    renderReview(rec, cached as DeepReview);
+    renderReview(rec, cached as DeepReview, appearance.showCoords);
     return;
   }
 
@@ -51,7 +51,7 @@ export async function openReview(rec: GameRecord, isCurrent: () => boolean = () 
       await saveReview(rec.ts, review).catch(() => {});
       if (!isCurrent()) return;
       closeSheet();
-      renderReview(rec, review);
+      renderReview(rec, review, appearance.showCoords);
     } catch (error) {
       if (!isCurrent()) return;
       status.textContent = `Review failed: ${(error as Error).message}`;
@@ -62,7 +62,7 @@ export async function openReview(rec: GameRecord, isCurrent: () => boolean = () 
   void runReview();
 }
 
-function renderReview(rec: GameRecord, review: DeepReview): void {
+function renderReview(rec: GameRecord, review: DeepReview, showCoords = true): void {
   document.querySelectorAll('.modal-back').forEach((modal) => modal.remove());
 
   const playerCard = rec.color === 'w' ? review.white : review.black;
@@ -77,6 +77,7 @@ function renderReview(rec: GameRecord, review: DeepReview): void {
   const board = new Board(replayHost, replayGame, {
     orientation: rec.color,
     interactive: false,
+    showCoords,
     onMove: () => {},
   });
   let shownPly = 0;

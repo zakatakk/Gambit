@@ -70,6 +70,8 @@ export async function mountPuzzles(container: HTMLElement, _app: App): Promise<v
   const board = new Board(el('div'), game, {
     orientation: 'w',
     interactive: false,
+    autoQueen: appearance.autoQueen,
+    showCoords: appearance.showCoords,
     onMove: (move) => void onMove(move),
   });
   const boardHost = el('div', { class: 'board-wrap' }, board.el);

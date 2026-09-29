@@ -363,22 +363,26 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     oppTier = saved.oppTier;
     oppName = saved.type === 'passplay' ? 'Pass & play' : `CPU ${saved.oppRating}`;
     opponentLabel.textContent = saved.type === 'passplay' ? 'White vs Black' : oppName;
-    modeLabel.textContent = saved.type === 'passplay'
+    baseModeLabel = saved.type === 'passplay'
       ? ' · pass-and-play · resumed'
       : ` · ${saved.rated ? 'rated' : 'casual'} · resumed`;
+    refreshOpeningLabel();
     mode = 'game';
-    const replay = new Chess(saved.startFen);
+    // Replay into the live game (not load of the end FEN) so history, the
+    // move list, seeking, and the final movesUci all stay intact.
+    game.load(saved.startFen);
+    let lastMove: { from: string; to: string } | null = null;
     for (const uci of saved.movesUci.split(/\s+/).filter(Boolean)) {
       try {
-        replay.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+        const applied = game.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+        lastMove = { from: applied.from, to: applied.to };
       } catch {
         break;
       }
     }
-    game.load(replay.fen());
     clock = new ChessClock(saved.timeControl, game.turn(), () => performance.now(), saved.clocksMs);
     board.setOrientation(saved.type === 'passplay' ? game.turn() : playerColor);
-    board.setLastMove(null);
+    board.setLastMove(lastMove);
     board.setInteractive(false);
     board.deselect();
     viewingPly = null;
@@ -486,7 +490,8 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     playerColor = 'w';
     mode = 'game';
     opponentLabel.textContent = 'White vs Black';
-    modeLabel.textContent = ' · pass-and-play';
+    baseModeLabel = ` · pass-and-play${tc.base > 0 ? ` · ${Math.round(tc.base / 60)}+${tc.inc}` : ''}`;
+    refreshOpeningLabel();
     clock = new ChessClock(tc, 'w');
     game.load(START_FEN);
     board.setOrientation('w');
