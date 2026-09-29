@@ -77,6 +77,7 @@ export interface PuzzleItem {
 
 export type PieceSet = 'cburnett' | 'staunty' | 'merida';
 export type BoardTheme = 'walnut' | 'marine' | 'slate';
+export type AccentPref = 'oxblood' | 'forest' | 'royal' | 'aubergine';
 
 export interface Settings {
   theme: 'system' | 'light' | 'dark';
@@ -86,6 +87,7 @@ export interface Settings {
   lastOpponentRating?: number;
   pieceSet: PieceSet;
   boardTheme: BoardTheme;
+  accent: AccentPref;
   autoQueen: boolean;
   showCoords: boolean;
 }
@@ -97,6 +99,7 @@ export const DEFAULT_SETTINGS: Settings = {
   engineTier: 'lite',
   pieceSet: 'cburnett',
   boardTheme: 'walnut',
+  accent: 'oxblood',
   autoQueen: true,
   showCoords: true,
 };

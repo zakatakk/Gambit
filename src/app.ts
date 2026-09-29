@@ -1,5 +1,5 @@
 /** App shell: bottom-tab navigation and screen mounting. */
-import { applyTheme, watchSystemTheme } from './theme';
+import { applyAccent, applyTheme, watchSystemTheme } from './theme';
 import { setSoundsEnabled, primeAudio } from './sounds';
 import { getSettings, getProfile } from './db';
 import { applyBoardTheme, applyPieceSet } from './pieces';
@@ -64,26 +64,44 @@ async function render(app: App, params?: Record<string, unknown>): Promise<void>
   }
 
   if (renderVersion !== version || current !== mount || activeTab !== tabToRender) return;
-  for (const button of document.querySelectorAll('nav.tabs button')) {
+  for (const button of document.querySelectorAll('nav.sidebar button')) {
     button.classList.toggle('active', (button as HTMLElement).dataset.tab === tabToRender);
   }
 }
 
 export function bootApp(): void {
-  const nav = el('nav', { class: 'tabs' });
+  // Sidebar navigation: hidden by default, opened from the edge handle.
+  const scrim = el('div', { class: 'sidebar-scrim', onclick: () => setSidebar(false) });
+  const sidebar = el('nav', { class: 'sidebar', 'aria-label': 'Sections' });
   for (const tab of TABS) {
     const button = el(
       'button',
       { 'data-tab': tab.id, onclick: () => { primeAudio(); app.navigate(tab.id); } },
       tab.label
     );
-    nav.appendChild(button);
+    sidebar.appendChild(button);
   }
-  document.body.appendChild(nav);
+  const handle = el('button', {
+    class: 'menu-handle',
+    'aria-label': 'Open menu',
+    'aria-expanded': 'false',
+    onclick: () => setSidebar(document.body.classList.toggle('sidebar-open')),
+  }, 'Menu');
+  document.body.append(handle, sidebar, scrim);
+
+  function setSidebar(open: boolean): void {
+    document.body.classList.toggle('sidebar-open', open);
+    handle.setAttribute('aria-expanded', String(open));
+  }
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') setSidebar(false);
+  });
 
   const app: App = {
     navigate(tab, params) {
       activeTab = tab;
+      document.body.classList.remove('sidebar-open');
+      handle.setAttribute('aria-expanded', 'false');
       void render(app, params);
     },
     refreshRating() {
@@ -98,6 +116,7 @@ export function bootApp(): void {
     try {
       const settings = await getSettings();
       applyTheme(settings.theme);
+      applyAccent(settings.accent);
       applyPieceSet(settings.pieceSet);
       applyBoardTheme(settings.boardTheme);
       setSoundsEnabled(settings.sounds);

@@ -349,6 +349,7 @@ function isSettings(value: unknown): value is Partial<Settings> {
   if (value.engineTier !== undefined && !['lite', 'full'].includes(String(value.engineTier))) return false;
   if (value.pieceSet !== undefined && !['cburnett', 'staunty', 'merida'].includes(String(value.pieceSet))) return false;
   if (value.boardTheme !== undefined && !['walnut', 'marine', 'slate'].includes(String(value.boardTheme))) return false;
+  if (value.accent !== undefined && !['oxblood', 'forest', 'royal', 'aubergine'].includes(String(value.accent))) return false;
   if (value.autoQueen !== undefined && typeof value.autoQueen !== 'boolean') return false;
   if (value.showCoords !== undefined && typeof value.showCoords !== 'boolean') return false;
   return value.lastOpponentRating === undefined || finiteNumber(value.lastOpponentRating);

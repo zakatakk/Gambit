@@ -3,7 +3,7 @@ import { Chess } from 'chess.js';
 import { Board } from '../board';
 import { getSettings, updateSettings, getProfile, updateProfile, exportData, importData, clearAll, getSavedAssessment } from '../db';
 import { engine } from '../engineClient';
-import { applyTheme } from '../theme';
+import { ACCENTS, applyAccent, applyTheme } from '../theme';
 import { applyBoardTheme, applyPieceSet, BOARD_THEMES, PIECE_SETS } from '../pieces';
 import { setSoundsEnabled, play } from '../sounds';
 import { el, toast, switchControl, modal } from '../ui';
@@ -120,6 +120,13 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
     void updateSetting('boardTheme', boardSelect.value as Settings['boardTheme'], applyBoardTheme);
   });
 
+  const accentSelect = el('select', {},
+    ...ACCENTS.map((accent) => el('option', { value: accent.id }, accent.label))) as HTMLSelectElement;
+  accentSelect.value = settings.accent;
+  accentSelect.addEventListener('change', () => {
+    void updateSetting('accent', accentSelect.value as Settings['accent'], applyAccent);
+  });
+
   const autoQueenSwitch = switchControl(settings.autoQueen, (enabled) => {
     void updateSetting('autoQueen', enabled);
   });
@@ -149,6 +156,7 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       el('div', { class: 'row' }, el('span', {}, 'Theme'), themeSelect),
       el('div', { class: 'row' }, el('span', {}, 'Pieces'), pieceSelect),
       el('div', { class: 'row' }, el('span', {}, 'Board'), boardSelect),
+      el('div', { class: 'row' }, el('span', {}, 'Accent'), accentSelect),
       preview.el.parentElement as HTMLElement,
       el('div', { class: 'row' }, el('span', {}, 'Sounds'), soundSwitch)),
     el('div', { class: 'section' },
@@ -176,7 +184,7 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       el('p', { class: 'tiny', style: 'margin:0' }, 'Glicko-2 rating · Stockfish engine (GPL) · Lichess puzzles (CC0)'))
   );
 
-  async function updateSetting<K extends 'theme' | 'sounds' | 'strictMode' | 'pieceSet' | 'boardTheme' | 'autoQueen' | 'showCoords'>(
+  async function updateSetting<K extends 'theme' | 'sounds' | 'strictMode' | 'pieceSet' | 'boardTheme' | 'accent' | 'autoQueen' | 'showCoords'>(
     key: K,
     value: Settings[K],
     apply?: (value: Settings[K]) => void
@@ -214,6 +222,7 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       if (!container.isConnected) return;
       const importedSettings = await getSettings();
       applyTheme(importedSettings.theme);
+      applyAccent(importedSettings.accent);
       applyPieceSet(importedSettings.pieceSet);
       applyBoardTheme(importedSettings.boardTheme);
       setSoundsEnabled(importedSettings.sounds);
@@ -248,6 +257,7 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       await clearAll();
       if (!container.isConnected) return;
       applyTheme('system');
+      applyAccent('oxblood');
       applyPieceSet('cburnett');
       applyBoardTheme('walnut');
       setSoundsEnabled(true);
