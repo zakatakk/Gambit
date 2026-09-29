@@ -5,12 +5,17 @@ import { engine } from '../engineClient';
 import { ratingToStrength, ASSESSMENT_LEVELS } from '../engineStrength';
 import { applyGameResult, setProfileRating } from '../ratingOps';
 import { ratePeriod } from '../glicko2';
-import { getProfile, getSettings, updateSettings, addGame, updateGame, updateProfile, getSavedAssessment, saveSavedAssessment } from '../db';
-import { applyBoardTheme, applyPieceSet } from '../pieces';
+import { getProfile, getSettings, updateSettings, addGame, updateGame, updateProfile, getSavedAssessment, saveSavedAssessment, getLiveGame, saveLiveGame, clearLiveGame, getReview } from '../db';
+import { applyBoardTheme, applyPieceSet, pieceImg } from '../pieces';
+import { ChessClock, formatClock } from '../clock';
+import { capturedSummary } from '../captured';
+import { detectOpening } from '../openings';
+import { serializeLiveGame, deserializeLiveGame, type SavedLiveGame } from '../liveGame';
 import { play } from '../sounds';
 import { el, modal, toast } from '../ui';
 import type { App } from '../app';
 import type { Color, EngineTier, GameResult, GameRecord, PuzzleItem } from '../types';
+import { TIME_CONTROLS, UNTIMED, type TimeControl } from '../types';
 import {
   newAssessment,
   priorFromPuzzles,
@@ -37,6 +42,8 @@ interface PlayParams {
   assessment?: boolean;
   mode?: 'probe' | 'ladder' | 'quick';
   rematch?: boolean;
+  /** Home sent us here to resume a saved unfinished game. */
+  gameLoad?: SavedLiveGame;
 }
 
 function shuffle<T>(arr: T[]): T[] {
@@ -61,9 +68,15 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   // ---------- state ----------
   let playerColor: Color = 'w';
   let oppRating = 1500;
+  let oppTier: EngineTier = 'lite';
   let oppName = 'CPU';
   let thinking = false;
   let mode: 'idle' | 'game' | 'probe' | 'ladder' = 'idle';
+  let gameType: 'none' | 'cpu' | 'passplay' = 'none';
+  let ratedGame = false;
+  let timeControl: TimeControl = UNTIMED;
+  let clock: ChessClock | null = null;
+  let clockTimer: ReturnType<typeof setInterval> | undefined;
   let lastLevel = 2;
   let assess: AssessmentState = newAssessment();
   let probeGeneration = 0;
@@ -80,6 +93,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   let lastResult: 'win' | 'loss' | 'draw' = 'draw';
   let gameGeneration = 0;
   let reviewGeneration = 0;
+  let baseModeLabel = '';
   const dispose = () => {
     gameGeneration++;
     probeGeneration++;
@@ -87,6 +101,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     reviewGeneration++;
     if (probeTimeout !== undefined) clearTimeout(probeTimeout);
     probeTimeout = undefined;
+    stopClockTimer();
     engine.cancelSearch();
     document.querySelectorAll('.modal-back').forEach((modal) => modal.remove());
   };
@@ -230,15 +245,311 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   const board = new Board(boardHost, game, {
     orientation: 'w',
     interactive: false,
+    autoQueen: settings.autoQueen,
+    showCoords: settings.showCoords,
     onMove: (m) => void onUserMove(m),
   });
+  const clockBar = el('div', { class: 'clock-bar' });
+  const capturedBar = el('div', { class: 'captured-bar' });
   const wrap = el('div', {},
     topBar,
     boardHost,
+    capturedBar,
+    clockBar,
     statusBar,
     controls
   );
   container.appendChild(wrap);
+
+  // ---------- clocks + captured material ----------
+  function stopClockTimer(): void {
+    if (clockTimer !== undefined) clearInterval(clockTimer);
+    clockTimer = undefined;
+  }
+
+  function startClockTimer(): void {
+    stopClockTimer();
+    if (!clock?.timed) return;
+    clockTimer = setInterval(() => {
+      renderClocks();
+      persistLiveGame();
+      if (clock?.flagged()) flagFall();
+    }, 500);
+  }
+
+  function renderClocks(): void {
+    if (!clock?.timed) {
+      clockBar.style.display = 'none';
+      return;
+    }
+    clockBar.style.display = 'flex';
+    const topColor: Color = board.orientation === 'w' ? 'b' : 'w';
+    const bottomColor: Color = topColor === 'w' ? 'b' : 'w';
+    const label = (color: Color) =>
+      gameType === 'passplay' ? (color === 'w' ? 'White' : 'Black') : color === playerColor ? 'You' : oppName;
+    const cell = (color: Color) =>
+      el('span', { class: `clock ${color}${game.turn() === color ? ' active' : ''}` },
+        el('b', {}, label(color)), formatClock(clock!.remainingMs(color)));
+    clockBar.replaceChildren(cell(topColor), cell(bottomColor));
+  }
+
+  function renderCaptured(): void {
+    if (gameType === 'none') {
+      capturedBar.style.display = 'none';
+      return;
+    }
+    capturedBar.style.display = 'flex';
+    const summary = capturedSummary(game);
+    const topColor: Color = board.orientation === 'w' ? 'b' : 'w';
+    const topCaptures = topColor === 'w' ? summary.byWhite : summary.byBlack;
+    const bottomCaptures = topColor === 'w' ? summary.byBlack : summary.byWhite;
+    const armyColor: Color = topColor === 'w' ? 'b' : 'w';
+    const topDiff = topColor === 'w' ? summary.balance : -summary.balance;
+    const row = (types: string[]) => {
+      const span = el('span', { class: 'captured-row' });
+      for (const type of types) span.appendChild(pieceImg(type, armyColor));
+      return span;
+    };
+    capturedBar.replaceChildren(
+      el('span', { class: 'captured-side' },
+        row(topCaptures),
+        topDiff > 0 ? el('b', {}, `+${topDiff}`) : null),
+      el('span', { class: 'captured-side' },
+        topDiff < 0 ? el('b', {}, `+${-topDiff}`) : null,
+        row(bottomCaptures))
+    );
+  }
+
+  function flagFall(): void {
+    if (mode !== 'game') return;
+    const flaggedColor: Color = game.turn();
+    stopClockTimer();
+    if (gameType === 'passplay') {
+      finishPassPlay(flaggedColor === 'w' ? 'b' : 'w', 'flag fell');
+      return;
+    }
+    finishGame('flag fell', flaggedColor === playerColor ? 'loss' : 'win');
+  }
+
+  // ---------- live-game persistence (resume) ----------
+  const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+  function persistLiveGame(): void {
+    if (mode !== 'game' || gameType === 'none') return;
+    const snapshot: SavedLiveGame = {
+      version: 1,
+      type: gameType === 'passplay' ? 'passplay' : 'cpu',
+      startFen: START_FEN,
+      movesUci: game.history({ verbose: true }).map((h) => h.from + h.to + (h.promotion ?? '')).join(' '),
+      playerColor,
+      oppRating,
+      oppTier: engine.tier ?? oppTier,
+      rated: ratedGame,
+      timeControl,
+      clocksMs: clock ? { w: clock.remainingMs('w'), b: clock.remainingMs('b') } : { w: 0, b: 0 },
+      ts: Date.now(),
+    };
+    void saveLiveGame(serializeLiveGame(snapshot)).catch(() => {});
+  }
+
+  /** Rebuild an interrupted game from its snapshot (Home or a gameLoad param). */
+  function resumeSavedGame(saved: SavedLiveGame): void {
+    const generation = ++gameGeneration;
+    gameType = saved.type;
+    ratedGame = saved.rated;
+    timeControl = saved.timeControl;
+    playerColor = saved.playerColor;
+    oppRating = saved.oppRating;
+    oppTier = saved.oppTier;
+    oppName = saved.type === 'passplay' ? 'Pass & play' : `CPU ${saved.oppRating}`;
+    opponentLabel.textContent = saved.type === 'passplay' ? 'White vs Black' : oppName;
+    modeLabel.textContent = saved.type === 'passplay'
+      ? ' · pass-and-play · resumed'
+      : ` · ${saved.rated ? 'rated' : 'casual'} · resumed`;
+    mode = 'game';
+    const replay = new Chess(saved.startFen);
+    for (const uci of saved.movesUci.split(/\s+/).filter(Boolean)) {
+      try {
+        replay.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+      } catch {
+        break;
+      }
+    }
+    game.load(replay.fen());
+    clock = new ChessClock(saved.timeControl, game.turn(), () => performance.now(), saved.clocksMs);
+    board.setOrientation(saved.type === 'passplay' ? game.turn() : playerColor);
+    board.setLastMove(null);
+    board.setInteractive(false);
+    board.deselect();
+    viewingPly = null;
+    renderMoves();
+    controlsInGame(saved.type === 'cpu' && !settings.strictMode);
+    renderCaptured();
+    renderClocks();
+    setStatus('Resuming — loading engine…');
+    void (async () => {
+      try {
+        await ensureEngine((s) => {
+          if (generation === gameGeneration && container.isConnected) setStatus(s);
+        });
+      } catch (error) {
+        if (generation === gameGeneration && container.isConnected) {
+          setStatus(`Engine failed to load: ${(error as Error).message}`, 'lose');
+        }
+        return;
+      }
+      if (generation !== gameGeneration || !container.isConnected || mode !== 'game') return;
+      const myTurn = gameType === 'passplay' || game.turn() === playerColor;
+      board.setInteractive(myTurn && !game.isGameOver());
+      if (myTurn) {
+        setStatus(gameType === 'passplay'
+          ? (game.turn() === 'w' ? 'White to move.' : 'Black to move.')
+          : 'Your move');
+      } else {
+        setStatus(`${oppName} is thinking…`);
+        void engineMove();
+      }
+      startClockTimer();
+      renderClocks();
+    })();
+  }
+
+  /** Offer to resume/discard a saved unfinished game below the idle controls. */
+  function restoreSavedGameInIdle(): void {
+    void getLiveGame()
+      .then((raw) => {
+        if (!container.isConnected || mode !== 'idle' || controls.dataset.resumable === '1') return;
+        if (controls.dataset.liveResumable === '1') return;
+        const saved = deserializeLiveGame(raw);
+        if (!saved) return;
+        controls.dataset.liveResumable = '1';
+        const moveCount = saved.movesUci.split(/\s+/).filter(Boolean).length;
+        const savedWhen = new Date(saved.ts);
+        controls.append(
+          el('p', { class: 'kicker' }, 'Unfinished game'),
+          el('div', { class: 'btn-row' },
+            el('button', { class: 'primary', onclick: () => {
+              delete controls.dataset.liveResumable;
+              resumeSavedGame(saved);
+            } },
+              saved.type === 'passplay' ? 'Resume pass-and-play' : `Resume vs CPU ${saved.oppRating}`),
+            el('button', { onclick: () => {
+              delete controls.dataset.liveResumable;
+              void clearLiveGame().catch(() => {});
+              controlsDefault();
+            } }, 'Discard')),
+          el('p', { class: 'tiny', style: 'margin:6px 0 0' },
+            `${moveCount} ${moveCount === 1 ? 'move' : 'moves'} played · saved ${savedWhen.toLocaleDateString()} ${savedWhen.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`));
+      })
+      .catch(() => {});
+  }
+
+  // ---------- game setup ----------
+  function showGameSetup(): void {
+    const tcSelect = el('select', {},
+      ...TIME_CONTROLS.map((entry) => el('option', { value: entry.id }, entry.label))) as HTMLSelectElement;
+    const colorSelect = el('select', {},
+      el('option', { value: 'random' }, 'Random'),
+      el('option', { value: 'w' }, 'White'),
+      el('option', { value: 'b' }, 'Black')) as HTMLSelectElement;
+    const closeSheet = modal(
+      el('h2', {}, 'New game'),
+      el('div', { class: 'row' }, el('span', {}, 'Time control'), tcSelect),
+      el('div', { class: 'row' }, el('span', {}, 'Your color'), colorSelect),
+      el('p', { class: 'tiny' }, 'Games of 10+0 or slower are rated.'),
+      el('div', { class: 'btn-row' },
+        el('button', { class: 'primary', onclick: () => {
+          const entry = TIME_CONTROLS.find((tc) => tc.id === tcSelect.value) ?? TIME_CONTROLS[0];
+          const color = colorSelect.value === 'random' ? undefined : (colorSelect.value as Color);
+          closeSheet();
+          void startGame({ color, timeControl: entry.tc });
+        } }, 'Play the CPU'),
+        el('button', { onclick: () => {
+          const entry = TIME_CONTROLS.find((tc) => tc.id === tcSelect.value) ?? TIME_CONTROLS[0];
+          closeSheet();
+          void startPassPlay(entry.tc);
+        } }, 'Two players')),
+      el('div', { class: 'btn-row' },
+        el('button', { onclick: () => closeSheet() }, 'Cancel'))
+    );
+  }
+
+  /** Two humans, one device. */
+  async function startPassPlay(tc: TimeControl): Promise<void> {
+    const generation = ++gameGeneration;
+    gameType = 'passplay';
+    ratedGame = false;
+    timeControl = tc;
+    oppRating = 0;
+    oppTier = 'lite';
+    oppName = 'Pass & play';
+    playerColor = 'w';
+    mode = 'game';
+    opponentLabel.textContent = 'White vs Black';
+    modeLabel.textContent = ' · pass-and-play';
+    clock = new ChessClock(tc, 'w');
+    game.load(START_FEN);
+    board.setOrientation('w');
+    board.setLastMove(null);
+    board.setInteractive(true);
+    board.deselect();
+    viewingPly = null;
+    renderMoves();
+    controlsInGame(false);
+    setStatus('White to move.');
+    renderCaptured();
+    renderClocks();
+    persistLiveGame();
+    startClockTimer();
+    void generation;
+  }
+
+  /** End a pass-and-play game: one record per side, no rating effects. */
+  function finishPassPlay(winner: Color, termination: string): void {
+    stopClockTimer();
+    board.setInteractive(false);
+    board.clearPreview();
+    viewingPly = null;
+    showSeekRow(false);
+    gameGeneration++;
+    thinking = false;
+    mode = 'idle';
+    void clearLiveGame().catch(() => {});
+    const movesUci = game.history({ verbose: true }).map((h) => h.from + h.to + (h.promotion ?? '')).join(' ');
+    const loser: Color = winner === 'w' ? 'b' : 'w';
+    const winnerName = winner === 'w' ? 'White wins' : 'Black wins';
+    setStatus(`${winnerName} (${termination}).`, 'win');
+    play('gameEnd');
+    const rec: GameRecord = {
+      ts: Date.now(),
+      type: 'passplay',
+      color: winner,
+      result: 'win',
+      movesUci,
+      startFen: START_FEN,
+      opponentRating: 0,
+      opponentTier: 'lite',
+      rated: false,
+      termination,
+    };
+    const loserRec: GameRecord = { ...rec, color: loser, result: 'loss' };
+    void (async () => {
+      try {
+        await addGame(rec);
+        await addGame(loserRec);
+      } catch (error) {
+        if (container.isConnected) toast(`Could not save game: ${(error as Error).message}`);
+      }
+    })();
+    const closeSheet = modal(
+      el('h2', {}, winnerName),
+      el('p', { class: 'muted' }, `${termination} · ${game.history().length} plies`),
+      el('div', { class: 'btn-row' },
+        el('button', { onclick: () => { closeSheet(); doReview(rec); } }, 'Review game'),
+        el('button', { class: 'primary', onclick: () => { closeSheet(); void startPassPlay(timeControl); } }, 'Play again'),
+        el('button', { onclick: () => { closeSheet(); controlsDefault(); } }, 'Done'))
+    );
+  }
 
   function setStatus(s: string, cls = ''): void {
     statusBar.textContent = s;
@@ -319,7 +630,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       controls.append(
         el('p', { class: 'kicker' }, 'Rated play'),
         el('div', { class: 'btn-row' },
-          el('button', { class: 'primary', onclick: () => void startGame() }, 'New game vs CPU')),
+          el('button', { class: 'primary', onclick: () => showGameSetup() }, 'New game vs CPU')),
       el('p', { class: 'tiny', style: 'margin:6px 0 0' },
         'Rated · CPU strength follows your rating'),
         el('div', { class: 'row', style: 'margin-top:8px' },
@@ -327,6 +638,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
         moveList
       );
       controlsResumable();
+      restoreSavedGameInIdle();
       return;
     }
     // Unrated: offer the three assessment modes.
@@ -345,15 +657,26 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       moveList
     );
     controlsResumable();
+    restoreSavedGameInIdle();
   }
 
   function controlsInGame(allowHelpers: boolean): void {
     controls.textContent = '';
+    const isPassPlay = gameType === 'passplay';
     controls.append(
       moveList,
       seekRow,
       el('div', { class: 'btn-row', style: 'margin-top:8px' },
-        el('button', { onclick: () => resign() }, 'Resign'),
+        el('button', { onclick: () => {
+          board.setOrientation(board.orientation === 'w' ? 'b' : 'w');
+          renderCaptured();
+          renderClocks();
+        } }, 'Flip board'),
+        isPassPlay
+          ? el('button', { onclick: () => {
+              if (confirm('End this game? White wins by resignation.')) finishPassPlay('w', 'resignation');
+            } }, 'Resign as Black')
+          : el('button', { onclick: () => resign() }, 'Resign'),
         allowHelpers ? el('button', { onclick: () => void hint() }, 'Hint') : null,
         allowHelpers ? el('button', { onclick: () => takeback() }, 'Takeback') : null)
     );
@@ -450,7 +773,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   }
 
   // ---------- game flow ----------
-  async function startGame(opts?: { color?: Color; rating?: number; ladder?: boolean }): Promise<void> {
+  async function startGame(opts?: { color?: Color; rating?: number; ladder?: boolean; timeControl?: TimeControl }): Promise<void> {
     const generation = ++gameGeneration;
     let p;
     try {
@@ -463,15 +786,23 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     }
     if (generation !== gameGeneration || !container.isConnected) return;
     oppRating = Math.round(opts?.rating ?? settings.lastOpponentRating ?? p.rating);
+    oppTier = activeEngineTier;
     playerColor = opts?.color ?? (Math.random() < 0.5 ? 'w' : 'b');
     oppName = opts?.ladder
       ? `Stockfish ${ASSESSMENT_LEVELS[lastLevel].label} (~${ASSESSMENT_LEVELS[lastLevel].rating})`
       : `CPU ${oppRating}`;
     opponentLabel.textContent = oppName;
-    modeLabel.textContent = opts?.ladder ? ' · assessment' : assessed ? ' · rated' : ' · casual';
+    gameType = opts?.ladder ? 'none' : 'cpu';
+    ratedGame = !opts?.ladder && assessed;
+    timeControl = opts?.timeControl ?? UNTIMED;
+    baseModeLabel = opts?.ladder
+      ? ' · assessment'
+      : `${assessed ? ' · rated' : ' · casual'}${timeControl.base > 0 ? ` · ${Math.round(timeControl.base / 60)}+${timeControl.inc}` : ''}`;
+    refreshOpeningLabel();
     mode = opts?.ladder ? 'ladder' : 'game';
 
-    game.load('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
+    game.load(START_FEN);
+    clock = new ChessClock(timeControl, 'w');
     board.setOrientation(playerColor);
     board.setLastMove(null);
     board.setInteractive(false);
@@ -479,6 +810,8 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     viewingPly = null;
     renderMoves();
     controlsInGame(!opts?.ladder && !settings.strictMode);
+    renderCaptured();
+    renderClocks();
     setStatus('Loading engine…');
     try {
       await ensureEngine((s) => {
@@ -491,11 +824,15 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     if (generation !== gameGeneration || !container.isConnected || (mode !== 'game' && mode !== 'ladder')) return;
     setStatus(playerColor === 'w' ? 'Your move — you play White' : `You play Black. ${oppName} starts…`);
     board.setInteractive(game.turn() === playerColor);
+    startClockTimer();
+    renderClocks();
     if (game.turn() !== playerColor) void engineMove();
+    persistLiveGame();
   }
 
   async function engineMove(): Promise<void> {
-    if (thinking || !container.isConnected || (mode !== 'game' && mode !== 'ladder') || game.isGameOver()) return;
+    // Engine plays in casual/rated CPU games AND assessment ladder games (mode ladder).
+    if (thinking || !container.isConnected || (mode !== 'ladder' && gameType !== 'cpu') || (mode !== 'game' && mode !== 'ladder') || game.isGameOver()) return;
 
     const generation = gameGeneration;
     thinking = true;
@@ -522,6 +859,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   function applyMove(mv: { from: string; to: string; promotion?: string }, byPlayer: boolean): boolean {
     const move = game.move({ from: mv.from, to: mv.to, promotion: mv.promotion ?? 'q' });
     if (!move) return false;
+    clock?.movePlayed();
     board.setLastMove({ from: mv.from, to: mv.to });
     if (isViewing()) {
       viewingPly = null;
@@ -530,16 +868,30 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     }
     board.render();
     renderMoves();
+    renderCaptured();
+    refreshOpeningLabel();
     play(move.captured ? 'capture' : 'move');
     if (game.isGameOver()) {
-      finishGame();
+      if (gameType === 'passplay') {
+        if (game.isCheckmate()) finishPassPlay(game.turn() === 'w' ? 'b' : 'w', 'checkmate');
+        else finishPassPlayDraw(game.isStalemate() ? 'stalemate' : 'draw');
+      } else {
+        finishGame();
+      }
       return true;
     }
     if (game.inCheck()) play('check');
-    if (mode === 'game' || mode === 'ladder') {
+    if (gameType === 'passplay') {
+      board.setInteractive(!game.isGameOver());
+      setStatus(game.turn() === 'w' ? 'White to move.' : 'Black to move.');
+      renderClocks();
+      persistLiveGame();
+    } else if (mode === 'game' || mode === 'ladder') {
       const myTurn = game.turn() === playerColor;
       board.setInteractive(myTurn && !thinking);
       setStatus(myTurn ? 'Your move' : `${oppName} is thinking…`);
+      renderClocks();
+      persistLiveGame();
       if (!myTurn) void engineMove();
     } else if (mode === 'probe') {
       void handleProbeMove(null, byPlayer);
@@ -554,8 +906,50 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       return;
     }
     if (mode !== 'game' && mode !== 'ladder') return;
+    if (gameType === 'passplay') {
+      if (!applyMove(m, true)) return;
+      return;
+    }
     if (game.turn() !== playerColor) return;
     if (!applyMove(m, true)) return;
+  }
+
+  /** Stalemate/draw in pass-and-play: one drawn record for each side. */
+  function finishPassPlayDraw(termination: string): void {
+    stopClockTimer();
+    board.setInteractive(false);
+    board.clearPreview();
+    viewingPly = null;
+    showSeekRow(false);
+    gameGeneration++;
+    thinking = false;
+    mode = 'idle';
+    void clearLiveGame().catch(() => {});
+    const movesUci = game.history({ verbose: true }).map((h) => h.from + h.to + (h.promotion ?? '')).join(' ');
+    const rec: GameRecord = {
+      ts: Date.now(),
+      type: 'passplay',
+      color: 'w',
+      result: 'draw',
+      movesUci,
+      startFen: START_FEN,
+      opponentRating: 0,
+      opponentTier: 'lite',
+      rated: false,
+      termination,
+    };
+    setStatus(`Draw (${termination}).`);
+    play('gameEnd');
+    void addGame(rec).catch(() => {});
+    void addGame({ ...rec, color: 'b' }).catch(() => {});
+    const closeSheet = modal(
+      el('h2', {}, 'Draw'),
+      el('p', { class: 'muted' }, `${termination} · ${game.history().length} plies`),
+      el('div', { class: 'btn-row' },
+        el('button', { onclick: () => { closeSheet(); doReview(rec); } }, 'Review game'),
+        el('button', { class: 'primary', onclick: () => { closeSheet(); void startPassPlay(timeControl); } }, 'Play again'),
+        el('button', { onclick: () => { closeSheet(); controlsDefault(); } }, 'Done'))
+    );
   }
 
   // ---------- end of game ----------
@@ -580,7 +974,10 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     viewingPly = null;
     showSeekRow(false);
     engine.cancelSearch();
+    stopClockTimer();
     const wasLadder = mode === 'ladder';
+    const wasPassPlay = gameType === 'passplay';
+    if (!wasLadder) void clearLiveGame().catch(() => {});
     gameGeneration++;
     thinking = false;
     mode = 'idle';
@@ -597,14 +994,14 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       .join(' ');
     const rec: GameRecord = {
       ts: Date.now(),
-      type: wasLadder ? 'assessment' : 'cpu',
+      type: wasLadder ? 'assessment' : wasPassPlay ? 'passplay' : 'cpu',
       color: playerColor,
       result: r.result,
       movesUci,
-      startFen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+      startFen: START_FEN,
       opponentRating: oppRating,
-      opponentTier: engine.tier ?? activeEngineTier,
-      rated: assessed && !wasLadder,
+      opponentTier: wasPassPlay ? 'lite' : (engine.tier ?? activeEngineTier),
+      rated: assessed && !wasLadder && !wasPassPlay,
       termination: r.termination,
     };
     const wasAssessed = assessed;
@@ -636,19 +1033,37 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
         }
       }
       if (finishedGameGeneration === gameGeneration && container.isConnected) {
-        showPostGame(rec, endedOpponentName, endedPlyCount);
+        void showPostGame(rec, endedOpponentName, endedPlyCount);
       }
     })();
   }
 
-  function showPostGame(rec: GameRecord, opponentNameAtEnd: string, plyCount: number): void {
+  interface ReviewPlayerSummary {
+    worst?: { ply: number; san: string; bestSan?: string };
+  }
+
+  /** Worst-move teaser from an existing analysis, if this game was reviewed before. */
+  async function reviewPrompt(rec: GameRecord): Promise<string> {
+    try {
+      const review = await getReview(rec.ts) as { players?: Record<string, ReviewPlayerSummary> } | null;
+      const worst = review?.players?.[rec.color === 'w' ? 'white' : 'black']?.worst;
+      if (!worst?.bestSan) return '';
+      return ` (${Math.ceil(worst.ply / 2)}${worst.ply % 2 ? '.' : '…'} ${worst.san} → ${worst.bestSan})`;
+    } catch {
+      return '';
+    }
+  }
+
+  async function showPostGame(rec: GameRecord, opponentNameAtEnd: string, plyCount: number): Promise<void> {
     const ratingLine = rec.ratingAfter
       ? el('p', { class: 'muted' },
           `Rating ${Math.round(rec.ratingBefore ?? 0)} → `, el('b', {}, String(Math.round(rec.ratingAfter))))
       : undefined;
     // Ladder advances FIRST (renders next game), then the result sheet overlays it.
     if (rec.type === 'assessment') setTimeout(() => onLadderGameFinished(), 0);
-    const reviewBtn = el('button', { onclick: () => doReview(rec) }, 'Review game');
+    const teaser = rec.type === 'assessment' ? '' : await reviewPrompt(rec);
+    const reviewBtn = el('button', { onclick: () => doReview(rec) },
+      teaser ? `Review blunders${teaser}` : 'Review game');
     const closeSheet = modal(
       el('h2', {}, rec.result === 'win' ? 'Victory' : rec.result === 'loss' ? 'Defeat' : 'Draw'),
       ...(ratingLine ? [ratingLine as Node] : []),
@@ -707,8 +1122,14 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   }
 
   function resign(): void {
-    if (mode !== 'game' && mode !== 'ladder') return;
+    if (gameType === 'passplay' || (mode !== 'game' && mode !== 'ladder')) return;
     finishGame('resignation', 'loss');
+  }
+
+  /** Keep the opening name in the sub-label once moves exist. */
+  function refreshOpeningLabel(): void {
+    const opening = gameType === 'none' ? null : detectOpening(historyVerbose());
+    modeLabel.textContent = baseModeLabel + (opening ? ` · ${opening.name}` : '');
   }
 
   function sanOf(mv: { from: string; to: string; promotion?: string }): string {
@@ -995,6 +1416,8 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   // ---------- boot ----------
   if (params.assessment) {
     void startAssessment(params.mode ?? 'probe');
+  } else if (params.gameLoad) {
+    resumeSavedGame(params.gameLoad);
   } else if (params.rematch) {
     void startGame();
   } else {

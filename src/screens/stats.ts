@@ -1,7 +1,8 @@
-/** Stats: rating history chart, game record, puzzle accuracy, reviews, history list. */
+/** Stats: rating history chart, game record, puzzle accuracy, openings, reviews, history list. */
 import { getHistory, recentGames, getAttempts, getProfile, reviewedGameTimestamps } from '../db';
 import { engine } from '../engineClient';
 import { el } from '../ui';
+import { detectOpening, replayUci } from '../openings';
 import { openReview } from './reviewView';
 import type { App } from '../app';
 import type { GameRecord } from '../types';
@@ -77,14 +78,46 @@ export async function mountStats(container: HTMLElement, _app: App): Promise<voi
           el('div', { class: 'list-tile' },
             el('span', {},
               el('b', {}, g.result === 'win' ? 'W' : g.result === 'loss' ? 'L' : 'D'),
-              ` vs CPU ${Math.round(g.opponentRating)}${g.type === 'assessment' ? ' · assessment' : ''}`),
+              gameListLabel(g)),
             el('span', { class: 'muted' },
               new Date(g.ts).toLocaleDateString(),
               g.ratingAfter ? ` · ${Math.round(g.ratingBefore ?? 0)}→${Math.round(g.ratingAfter)}` : ''))
         ) as Node[])
   );
 
+  const openings = new Map<string, { eco: string; name: string; count: number }>();
+  for (const g of reviewable) {
+    const uci = g.movesUci.split(/\s+/).filter(Boolean);
+    if (uci.length < 4) continue;
+    const replay = replayUci(g.startFen, uci.slice(0, 12));
+    const info = detectOpening(replay.history({ verbose: true }));
+    if (!info) continue;
+    const key = `${info.eco} ${info.name}`;
+    const entry = openings.get(key) ?? { ...info, count: 0 };
+    entry.count += 1;
+    openings.set(key, entry);
+  }
+  const openingRows = [...openings.values()].sort((a, b) => b.count - a.count).slice(0, 5);
+  const openingsCard = el('div', { class: 'section' },
+    el('p', { class: 'kicker' }, 'Openings'),
+    openingRows.length === 0
+      ? el('p', { class: 'muted' }, 'Openings appear here once you have played a few games.')
+      : el('div', {}, ...openingRows.map((row) =>
+          el('div', { class: 'list-tile' },
+            el('span', {}, el('b', {}, row.eco), ` ${row.name}`),
+            el('span', { class: 'muted' }, `${row.count} ${row.count === 1 ? 'game' : 'games'}`))) as Node[])
+  );
+
+  container.append(card, spark, recordCard, openingsCard, reviewsCard, historyCard);
+
   container.append(card, spark, recordCard, reviewsCard, historyCard);
+
+  /** Human label per game type (CPU / assessment / pass-and-play). */
+  function gameListLabel(g: GameRecord): string {
+    if (g.type === 'passplay') return ' pass-and-play';
+    if (g.type === 'assessment') return ` vs ${Math.round(g.opponentRating)} · assessment`;
+    return ` vs CPU ${Math.round(g.opponentRating)}`;
+  }
 
   function reviewTile(g: GameRecord, analysed: boolean): HTMLElement {
     const res = g.result === 'win' ? 'W' : g.result === 'loss' ? 'L' : 'D';
@@ -92,8 +125,7 @@ export async function mountStats(container: HTMLElement, _app: App): Promise<voi
       class: 'moment-tile',
       onclick: () => void openReview(g, () => container.isConnected),
     },
-      el('span', {},
-        el('b', {}, res), ` vs CPU ${Math.round(g.opponentRating)}`),
+      el('span', {}, el('b', {}, res), gameListLabel(g)),
       el('span', { class: 'muted' }, new Date(g.ts).toLocaleDateString()),
       analysed ? el('span', { class: 'chip' }, 'analysed') : el('span', { class: 'chip' }, 'Analyse')
     );

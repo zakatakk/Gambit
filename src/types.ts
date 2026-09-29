@@ -22,6 +22,9 @@ export const TIME_CONTROLS: readonly { id: string; label: string; tc: TimeContro
   { id: 'classic', label: '15+10 · classical', tc: { base: 900, inc: 10 } },
 ];
 
+/** Shared untimed control (default for CPU games and ladder play). */
+export const UNTIMED: TimeControl = { base: 0, inc: 0 };
+
 export interface Profile {
   rating: number;
   rd: number;

@@ -227,6 +227,18 @@ nav.tabs button {
 nav.tabs button.active { color: var(--accent); border-top-color: var(--accent); }
 nav.tabs button:active { color: var(--ink); }
 
+/* analysis board */
+.analysis-eval { display: flex; align-items: center; gap: 8px; }
+.eval-bar {
+  flex: 0 0 auto; width: 10px; height: 14px; border-radius: 3px; overflow: hidden;
+  background: var(--ink); border: 1px solid var(--rule);
+  display: flex; align-items: stretch; justify-content: flex-start;
+}
+.eval-bar > div { background: var(--paper); height: 100%; transition: width 0.3s ease; }
+.eval-label { font-family: var(--mono); font-size: 0.8rem; color: var(--ink-2); min-width: 4ch; }
+.analysis-line { font-size: 0.85rem; margin: 6px 0 0; padding: 0 var(--page-gutter); }
+.analysis-board { padding-bottom: 2px; }
+
 /* Settings example board: a live preview of the chosen pieces + palette. */
 .preview-wrap { --board-size: min(62vw, 230px); padding: 12px var(--page-gutter) 4px; }
 .preview-wrap .board { touch-action: auto; }
@@ -319,6 +331,26 @@ body.viewing .status-bar { opacity: 0.55; }
 
 .seek-row { display: flex; gap: 6px; margin-top: 8px; }
 .seek-row button { flex: 1; padding: 8px 0; font-size: 0.85rem; }
+
+/* clocks + captured material */
+.clock-bar { display: none; gap: 8px; justify-content: center; margin: 6px 0 0; }
+.clock-bar .clock {
+  flex: 0 0 auto; min-width: 118px; display: flex; gap: 8px; align-items: baseline; justify-content: center;
+  font-family: var(--mono); font-size: 0.95rem; padding: 4px 10px;
+  border: 1px solid var(--rule); border-radius: 4px; background: var(--panel); color: var(--ink-2);
+}
+.clock-bar .clock b { font-family: var(--sans); font-size: 0.62rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
+.clock-bar .clock.active { color: var(--ink); border-color: var(--accent); }
+.captured-bar { display: none; justify-content: space-between; gap: 8px; margin: 4px 0 0; min-height: 20px; }
+.captured-bar .captured-side { display: flex; align-items: center; gap: 0; min-height: 20px; }
+.captured-bar .captured-side b { font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2); margin: 0 4px; }
+.captured-bar .captured-row img { width: 18px; height: 18px; margin-right: -5px; display: block; opacity: 0.9; }
+
+/* puzzle practice */
+.practice-bar { justify-content: flex-start; }
+.practice-bar button { flex: 0 1 auto; padding: 6px 12px; font-size: 0.8rem; }
+.practice-chip { align-self: center; margin-right: auto; }
+.theme-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
 
 /* ---------- home hero ---------- */
 .hero { padding-top: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--rule-2); }

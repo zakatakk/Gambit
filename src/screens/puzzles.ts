@@ -1,12 +1,12 @@
-/** Puzzles: retry-based solving on the unified rating scale. */
+/** Puzzles: retry-based solving on the unified rating scale, plus unrated practice. */
 import { Chess } from 'chess.js';
 import { Board } from '../board';
 import { loadPuzzles, pickPuzzle } from '../puzzles';
 import { applyPuzzleResult } from '../ratingOps';
-import { getAttempts, getProfile, getSettings } from '../db';
+import { getAttempts, getProfile, getSettings, addAttempt } from '../db';
 import { applyBoardTheme, applyPieceSet } from '../pieces';
 import { play } from '../sounds';
-import { el } from '../ui';
+import { el, modal } from '../ui';
 import type { App } from '../app';
 import type { PuzzleAttempt, PuzzleItem } from '../types';
 import {
@@ -44,6 +44,20 @@ export async function mountPuzzles(container: HTMLElement, _app: App): Promise<v
   let profileCache = await getProfile();
   if (!container.isConnected) return;
 
+  // ---------- practice mode: missed retries + theme sets, unrated ----------
+  let practiceMode: 'normal' | 'missed' | string = 'normal';
+  let practiceQueue: PuzzleItem[] = [];
+  const TIME_THEMES = ['short', 'long', 'veryShort'];
+
+  function shuffle<T>(arr: T[]): T[] {
+    const a = [...arr];
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
   let puzzleGeneration = 0;
   let activeTimeout: ReturnType<typeof setTimeout> | undefined;
   let puzzlesPromise: Promise<PuzzleItem[]> | null = null;
@@ -64,7 +78,96 @@ export async function mountPuzzles(container: HTMLElement, _app: App): Promise<v
       el('h1', {}, 'Puzzles'),
       el('span', { class: 'est' }, `${attempts.filter((attempt) => attempt.won).length} SOLVED`))
   );
-  container.append(header, metaBar, boardHost, feedback, solutionLine, controls);
+  const practiceBar = el('div', { class: 'practice-bar btn-row' });
+  renderPracticeBar();
+  container.append(header, practiceBar, metaBar, boardHost, feedback, solutionLine, controls);
+
+  function renderPracticeBar(): void {
+    practiceBar.replaceChildren();
+    if (practiceMode === 'normal') {
+      practiceBar.append(
+        el('button', { onclick: () => void startMissedPractice() }, 'Practice missed'),
+        el('button', { onclick: () => void showThemePicker() }, 'Practice themes'));
+      return;
+    }
+    const label = practiceMode === 'missed' ? 'Missed puzzles' : practiceMode;
+    practiceBar.append(
+      el('span', { class: 'chip practice-chip' }, `Practice: ${label} · not rated`),
+      el('button', { onclick: () => exitPractice() }, 'Exit practice'));
+  }
+
+  function startMissedPractice(): Promise<void> {
+    return voidLoadPractice(async () => {
+      const all = await loadPuzzleBundle();
+      const missedIds = new Set(attempts.filter((attempt) => !attempt.won).map((attempt) => attempt.id));
+      const missed = all.filter((puzzle) => missedIds.has(puzzle.id));
+      if (missed.length === 0) {
+        setFeedback('No missed puzzles to retry — nice.', 'good');
+        return null;
+      }
+      return { mode: 'missed' as const, puzzles: shuffle(missed).slice(0, 20) };
+    });
+  }
+
+  function showThemePicker(): Promise<void> {
+    return voidLoadPractice(async () => {
+      const all = await loadPuzzleBundle();
+      const counts = new Map<string, number>();
+      for (const puzzle of all) {
+        for (const theme of puzzle.themes) {
+          if (TIME_THEMES.includes(theme)) continue;
+          counts.set(theme, (counts.get(theme) ?? 0) + 1);
+        }
+      }
+      const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12);
+      const buttons = top.map(([theme]) =>
+        el('button', { onclick: () => {
+          close();
+          const pool = shuffle(all.filter((puzzle) => puzzle.themes.includes(theme)));
+          void startPractice(theme, pool.slice(0, 20));
+        } }, `${theme} (${counts.get(theme) ?? 0})`));
+      const close = modal(el('h2', {}, 'Practice a theme'),
+        el('p', { class: 'muted' }, 'Twenty unrated puzzles on one motif.'),
+        el('div', { class: 'theme-picker' }, ...buttons));
+      return null; // queue is set by the chosen button
+    });
+  }
+
+  /** Shared plumbing for practice entry points that load the bundle first. */
+  async function voidLoadPractice(
+    build: () => Promise<{ mode: 'missed'; puzzles: PuzzleItem[] } | null>
+  ): Promise<void> {
+    board.setInteractive(false);
+    try {
+      const result = await build();
+      if (!result) return;
+      await startPractice(result.mode, result.puzzles);
+    } catch (error) {
+      setFeedback(`Could not start practice: ${(error as Error).message}`, 'bad');
+    }
+  }
+
+  async function startPractice(name: string, puzzles: PuzzleItem[]): Promise<void> {
+    if (puzzles.length === 0) {
+      setFeedback('No puzzles available for that practice.', 'bad');
+      return;
+    }
+    practiceMode = name;
+    practiceQueue = puzzles;
+    current = null;
+    solved = false;
+    failed = false;
+    solutionShown = false;
+    renderPracticeBar();
+    await nextPuzzle();
+  }
+
+  function exitPractice(): void {
+    practiceMode = 'normal';
+    practiceQueue = [];
+    renderPracticeBar();
+    setFeedback('Back to rated puzzles.');
+  }
 
   function setFeedback(message: string, className = ''): void {
     feedback.textContent = message;
@@ -104,10 +207,22 @@ export async function mountPuzzles(container: HTMLElement, _app: App): Promise<v
         return;
       }
       if (current && !recordedCurrent) seen.add(current.id);
-      const puzzle = pickPuzzle(all, profileCache.rating, seen);
-      if (!puzzle) {
-        setFeedback('No puzzles left in your rating range.', 'good');
-        return;
+      let puzzle: PuzzleItem | null;
+      if (practiceMode !== 'normal') {
+        // Practice works through its fixed queue, ignoring the rating band.
+        puzzle = practiceQueue.shift() ?? null;
+        if (!puzzle) {
+          setFeedback('Practice complete — nice work.', 'good');
+          practiceMode = 'normal';
+          renderPracticeBar();
+          return;
+        }
+      } else {
+        puzzle = pickPuzzle(all, profileCache.rating, seen);
+        if (!puzzle) {
+          setFeedback('No puzzles left in your rating range.', 'good');
+          return;
+        }
       }
 
       current = puzzle;
@@ -301,6 +416,32 @@ export async function mountPuzzles(container: HTMLElement, _app: App): Promise<v
     inFlightPuzzleId = puzzle.id;
     if (current?.id === puzzle.id) recordingCurrent = true;
     seen.add(puzzle.id);
+    if (practiceMode !== 'normal') {
+      // Practice: store the attempt for future 'missed' retries, never re-rate.
+      try {
+        await addAttempt({ id: puzzle.id, won, score, mistakes, rating: puzzle.rating, ts: Date.now() });
+        if (current?.id !== puzzle.id) return;
+        recordedCurrent = true;
+        pendingRecord = null;
+        streak = won ? streak + 1 : 0;
+        if (!container.isConnected) return;
+        setFeedback(
+          `${won ? 'Solved' : 'Missed'} — practice (${practiceQueue.length} ${practiceQueue.length === 1 ? 'puzzle' : 'puzzles'} left).`,
+          won ? 'good' : 'bad');
+      } catch (error) {
+        if (container.isConnected && current?.id === puzzle.id) {
+          pendingRecord = { puzzle, won, score, mistakes };
+          setFeedback(`Could not save puzzle result: ${(error as Error).message}`, 'bad');
+        }
+      } finally {
+        if (inFlightPuzzleId === puzzle.id) inFlightPuzzleId = null;
+        if (current?.id === puzzle.id) {
+          recordingCurrent = false;
+          if (container.isConnected) renderPuzzleControls();
+        }
+      }
+      return;
+    }
     const attempt: PuzzleAttempt = {
       id: puzzle.id,
       won,

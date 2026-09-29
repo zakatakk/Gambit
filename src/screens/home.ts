@@ -1,5 +1,6 @@
 /** Home: rating overview, assessment entry, engine download. */
-import { getProfile, getSettings, countGames, getAttempts, updateSettings, getSavedAssessment } from '../db';
+import { getProfile, getSettings, countGames, getAttempts, updateSettings, getSavedAssessment, getLiveGame } from '../db';
+import { deserializeLiveGame } from '../liveGame';
 import { engine } from '../engineClient';
 import { el, modal, toast } from '../ui';
 import { play } from '../sounds';
@@ -16,6 +17,7 @@ export async function mountHome(container: HTMLElement, app: App): Promise<void>
 
   const savedAssessment = await getSavedAssessment().catch(() => null);
   const hasSaved = Boolean(savedAssessment) && !profile.assessed;
+  const savedGame = deserializeLiveGame(await getLiveGame().catch(() => null));
 
   const hero = el('div', { class: 'hero' },
     el('div', { class: 'brand' }, el('h1', {}, 'Gambit')),
@@ -37,6 +39,13 @@ export async function mountHome(container: HTMLElement, app: App): Promise<void>
 
   const train = el('div', { class: 'section' },
     el('p', { class: 'kicker' }, profile.assessed ? 'Play' : 'Establish a rating'),
+    savedGame ? el('div', {},
+      modeTile(
+        savedGame.type === 'passplay' ? 'Resume pass-and-play' : `Resume vs CPU ${savedGame.oppRating}`,
+        `${savedGame.movesUci.split(/\s+/).filter(Boolean).length} ${savedGame.movesUci.split(/\s+/).filter(Boolean).length === 1 ? 'move' : 'moves'} played${savedGame.timeControl.base > 0 ? ' · clock saved' : ''}`,
+        () => app.navigate('play', { gameLoad: savedGame })),
+      el('p', { class: 'tiny', style: 'margin:6px 0 0' }, 'An unfinished game is waiting.'))
+      : null,
     profile.assessed
       ? el('div', { class: 'btn-row' },
           el('button', { class: 'primary', onclick: () => app.navigate('play', { rematch: true }) }, 'Play vs CPU'),

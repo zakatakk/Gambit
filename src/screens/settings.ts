@@ -120,6 +120,13 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
     void updateSetting('boardTheme', boardSelect.value as Settings['boardTheme'], applyBoardTheme);
   });
 
+  const autoQueenSwitch = switchControl(settings.autoQueen, (enabled) => {
+    void updateSetting('autoQueen', enabled);
+  });
+  const coordsSwitch = switchControl(settings.showCoords, (enabled) => {
+    void updateSetting('showCoords', enabled);
+  });
+
   const soundSwitch = switchControl(settings.sounds, (enabled) => {
     void updateSetting('sounds', enabled, setSoundsEnabled).then(() => { if (enabled && container.isConnected) play('move'); });
   });
@@ -151,7 +158,9 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       el('div', { class: 'row' }, el('span', {}, 'Engine'), tierSelect)),
     el('div', { class: 'section' },
       el('h2', {}, 'Gameplay'),
-      el('div', { class: 'row' }, el('span', {}, 'Strict mode'), strictSwitch)),
+      el('div', { class: 'row' }, el('span', {}, 'Strict mode'), strictSwitch),
+      el('div', { class: 'row' }, el('span', {}, 'Always promote to queen'), autoQueenSwitch),
+      el('div', { class: 'row' }, el('span', {}, 'Board coordinates'), coordsSwitch)),
     el('div', { class: 'section' },
       el('h2', {}, 'Rating'),
       el('p', { class: 'muted', style: 'margin-top:0' },
@@ -167,7 +176,7 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       el('p', { class: 'tiny', style: 'margin:0' }, 'Glicko-2 rating · Stockfish engine (GPL) · Lichess puzzles (CC0)'))
   );
 
-  async function updateSetting<K extends 'theme' | 'sounds' | 'strictMode' | 'pieceSet' | 'boardTheme'>(
+  async function updateSetting<K extends 'theme' | 'sounds' | 'strictMode' | 'pieceSet' | 'boardTheme' | 'autoQueen' | 'showCoords'>(
     key: K,
     value: Settings[K],
     apply?: (value: Settings[K]) => void
@@ -208,6 +217,7 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       applyPieceSet(importedSettings.pieceSet);
       applyBoardTheme(importedSettings.boardTheme);
       setSoundsEnabled(importedSettings.sounds);
+      toast('Data imported.');
       toast('Data imported.');
       await app.refreshRating();
     } catch (error) {

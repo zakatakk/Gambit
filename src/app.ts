@@ -9,8 +9,9 @@ import { mountPlay } from './screens/play';
 import { mountPuzzles } from './screens/puzzles';
 import { mountStats } from './screens/stats';
 import { mountSettings } from './screens/settings';
+import { mountAnalysis } from './screens/analysis';
 
-export type AppTab = 'home' | 'play' | 'puzzles' | 'stats' | 'settings';
+export type AppTab = 'home' | 'play' | 'puzzles' | 'analysis' | 'stats' | 'settings';
 
 export interface App {
   navigate(tab: AppTab, params?: Record<string, unknown>): void;
@@ -26,6 +27,7 @@ const TABS = [
   { id: 'home', label: 'Home' },
   { id: 'play', label: 'Play' },
   { id: 'puzzles', label: 'Puzzles' },
+  { id: 'analysis', label: 'Analyse' },
   { id: 'stats', label: 'Stats' },
   { id: 'settings', label: 'Settings' },
 ] as const;
@@ -48,6 +50,7 @@ async function render(app: App, params?: Record<string, unknown>): Promise<void>
       case 'home': await mountHome(mount, app); break;
       case 'play': await mountPlay(mount, app, params ?? {}); break;
       case 'puzzles': await mountPuzzles(mount, app); break;
+      case 'analysis': await mountAnalysis(mount, app); break;
       case 'stats': await mountStats(mount, app); break;
       case 'settings': await mountSettings(mount, app); break;
     }
