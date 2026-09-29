@@ -158,7 +158,7 @@ export async function deepReview(
     const result = await analysePosition(fens[i]);
     evaluations.push(result);
     evalGraph.push({ ply: i, cp: Math.max(-1000, Math.min(1000, result.cp)) });
-    onProgress(i + 1, total, `Analysed ${i + 1}/${total} positions`);
+    onProgress(i + 1, total, `Analyzed ${i + 1}/${total} positions`);
   }
 
   const plies: PlyReview[] = [];

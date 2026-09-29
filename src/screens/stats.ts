@@ -127,7 +127,7 @@ export async function mountStats(container: HTMLElement, _app: App): Promise<voi
     },
       el('span', {}, el('b', {}, res), gameListLabel(g)),
       el('span', { class: 'muted' }, new Date(g.ts).toLocaleDateString()),
-      analysed ? el('span', { class: 'chip' }, 'analysed') : el('span', { class: 'chip' }, 'Analyse')
+      analysed ? el('span', { class: 'chip' }, 'analyzed') : el('span', { class: 'chip' }, 'Analyze')
     );
   }
 

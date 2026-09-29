@@ -89,7 +89,7 @@ Gambit's sounds are short effects; they mix with Spotify, they don't replace it.
 | Play a rated game | Play → **New game vs CPU** (strength = your rating) |
 | Solve puzzles | Puzzles tab — one wrong move fails, Lichess-style |
 | Review a game | After a game → **Review game** → tap the eval graph to jump around |
-| Old reviews | Stats → **Learn** → tap any analysed game |
+| Old reviews | Stats → **Learn** → tap any analyzed game |
 | Difficulty override | Settings → **Difficulty** slider |
 | Strict mode | Settings → toggle (no hints/takebacks) |
 | Backup | Settings → Data → **Export data** |
