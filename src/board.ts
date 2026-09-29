@@ -10,6 +10,8 @@ export interface BoardOptions {
   autoQueen?: boolean;
   /** Show file/rank coordinates on the board edges (Settings). */
   showCoords?: boolean;
+  /** Position-editor hook: free placement, any-piece drags, removals. */
+  onEdit?: (action: { type: 'tap' | 'move' | 'remove'; from?: string; to?: string }) => void;
   onMove: (m: { from: string; to: string; promotion?: string }) => void;
 }
 
@@ -31,6 +33,7 @@ export class Board {
   private lastMove: { from: string; to: string } | null = null;
   private previewFen: string | null = null;
   private previewLastMove: { from: string; to: string } | null = null;
+  private editMode = false;
   private squareEls = new Map<string, HTMLElement>();
 
   constructor(container: HTMLElement, game: Chess, opts: BoardOptions) {
@@ -39,7 +42,13 @@ export class Board {
     this.el = document.createElement('div');
     this.el.className = 'board';
     container.appendChild(this.el);
-    this.el.addEventListener('contextmenu', (e) => e.preventDefault());
+    this.el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      if (this.editMode && this.opts.onEdit) {
+        const sq = this.sqFromPoint(e.clientX, e.clientY);
+        if (sq && this.game.get(sq as Square)) this.opts.onEdit({ type: 'remove', from: sq });
+      }
+    });
     // Capture retargets pointerup here — resolve from coordinates, not event target.
     this.el.addEventListener('pointerup', (e) => this.onBoardPointerUp(e));
     this.buildGrid();
@@ -54,6 +63,13 @@ export class Board {
 
   get orientation(): Color {
     return this.opts.orientation;
+  }
+
+  /** Edit mode: drags move any piece anywhere; taps and drops report to onEdit. */
+  setEditMode(on: boolean): void {
+    this.editMode = on;
+    this.selected = null;
+    this.clearMarks();
   }
 
   setLastMove(m: { from: string; to: string } | null): void {
@@ -183,6 +199,21 @@ export class Board {
 
   private onPointerDown(e: PointerEvent, sq: string): void {
     if (!this.opts.interactive || this.pendingPromotion || this.previewFen !== null) return;
+    if (this.editMode) {
+      const piece = this.game.get(sq as Square);
+      if (piece) {
+        try {
+          this.el.setPointerCapture?.(e.pointerId);
+        } catch {
+          /* synthetic pointers in tests have no active pointer */
+        }
+        this.startDrag(e, sq as Square, piece);
+      } else {
+        this.opts.onEdit?.({ type: 'tap', to: sq });
+      }
+      e.preventDefault();
+      return;
+    }
     // Capture the pointer on the BOARD (not the square) so drags keep firing
     // pointermove/pointerup at the board even if the finger leaves the cell.
     try {
@@ -236,6 +267,11 @@ export class Board {
     this.dragging = null;
     ghost.remove();
     for (const [, cell] of this.squareEls) cell.classList.remove('over');
+    if (this.editMode) {
+      if (sq && sq !== from) this.opts.onEdit?.({ type: 'move', from, to: sq });
+      else if (!sq) this.opts.onEdit?.({ type: 'remove', from }); // dragged off the board
+      return;
+    }
     if (sq && sq !== from) {
       const moved = this.attemptMove(from, sq, true);
       if (moved && !this.pendingPromotion) {

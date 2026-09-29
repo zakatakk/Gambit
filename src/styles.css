@@ -478,6 +478,21 @@ body.sidebar-open .menu-handle { visibility: hidden; }
 .analysis-line { font-size: 0.85rem; margin: 6px 0 0; padding: 0 var(--page-gutter); }
 .analysis-board { padding-bottom: 2px; }
 
+/* position editor tray */
+.tray {
+  display: none; flex-wrap: wrap; gap: 6px; align-items: center;
+  padding: 8px var(--page-gutter) 2px;
+}
+.tray .tray-piece, .tray .tray-trash {
+  width: 40px; height: 40px; padding: 3px; line-height: 1;
+  border: 1px solid var(--rule-2); border-radius: var(--radius-btn);
+  background: var(--panel); color: var(--ink-3);
+}
+.tray .tray-piece img { width: 100%; height: 100%; display: block; }
+.tray .tray-piece.active, .tray .tray-trash.active { border-color: var(--accent); color: var(--accent); }
+.tray .tray-trash { font-size: 0.62rem; font-weight: 600; text-transform: uppercase; }
+.nav-row { padding-top: 2px; }
+
 /* Settings example board: a live preview of the chosen pieces + palette. */
 .preview-wrap { --board-size: min(62vw, 230px); padding: 12px var(--page-gutter) 4px; }
 .preview-wrap .board { touch-action: auto; }
