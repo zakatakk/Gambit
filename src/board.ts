@@ -6,6 +6,10 @@ import type { Color } from './types';
 export interface BoardOptions {
   orientation: Color;
   interactive: boolean;
+  /** Skip the promotion picker and always promote to a queen (Settings). */
+  autoQueen?: boolean;
+  /** Show file/rank coordinates on the board edges (Settings). */
+  showCoords?: boolean;
   onMove: (m: { from: string; to: string; promotion?: string }) => void;
 }
 
@@ -46,6 +50,10 @@ export class Board {
     this.opts.orientation = o;
     this.buildGrid();
     this.render();
+  }
+
+  get orientation(): Color {
+    return this.opts.orientation;
   }
 
   setLastMove(m: { from: string; to: string } | null): void {
@@ -90,13 +98,13 @@ export class Board {
         const cell = document.createElement('div');
         cell.className = `square ${(r + f) % 2 === 0 ? 'light' : 'dark'}`;
         cell.dataset.sq = sq;
-        if (r === 7) {
+        if (this.opts.showCoords !== false && r === 7) {
           const fileLabel = document.createElement('span');
           fileLabel.className = 'coord file';
           fileLabel.textContent = sq[0];
           cell.appendChild(fileLabel);
         }
-        if (f === 0) {
+        if (this.opts.showCoords !== false && f === 0) {
           const rankLabel = document.createElement('span');
           rankLabel.className = 'coord rank';
           rankLabel.textContent = sq[1];
@@ -264,6 +272,13 @@ export class Board {
     const legal = this.game.moves({ square: from, verbose: true }).filter((m) => m.to === to);
     if (legal.length === 0) return false;
     if (legal.some((m) => m.promotion)) {
+      if (this.opts.autoQueen) {
+        this.pendingPromotion = null;
+        this.clearMarks();
+        this.selected = null;
+        this.opts.onMove({ from, to, promotion: 'q' });
+        return true;
+      }
       this.pendingPromotion = { from, to };
       this.showPromoMenu(from, to);
       return true;

@@ -3,8 +3,9 @@ import type { GameRecord, Profile, PuzzleAttempt, RatingHistoryPoint, Settings }
 import { DEFAULT_SETTINGS } from './types';
 
 const DB_NAME = 'gambit';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const GAME_TS_INDEX = 'ts';
+const LIVE_GAME_KEY = 'livegame';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -23,6 +24,7 @@ function open(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains('history')) db.createObjectStore('history', { keyPath: 'ts' });
       if (!db.objectStoreNames.contains('attempts')) db.createObjectStore('attempts', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('reviews')) db.createObjectStore('reviews', { keyPath: 'gameTs' });
+      if (!db.objectStoreNames.contains('livegame')) db.createObjectStore('livegame');
     };
     request.onsuccess = () => {
       const db = request.result;
@@ -244,6 +246,11 @@ export function getAttempts(): Promise<PuzzleAttempt[]> {
   return requestTransaction('attempts', 'readonly', (store) => store.getAll());
 }
 
+/** Store a puzzle attempt without touching the rating (practice mode). */
+export function addAttempt(attempt: PuzzleAttempt): Promise<unknown> {
+  return requestTransaction('attempts', 'readwrite', (store) => store.put(attempt));
+}
+
 export interface SavedReview {
   gameTs: number;
   savedAt: number;
@@ -267,13 +274,26 @@ export async function reviewedGameTimestamps(): Promise<Set<number>> {
 }
 
 export async function clearAll(): Promise<void> {
-  await transaction(['kv', 'games', 'history', 'attempts', 'reviews'], 'readwrite', (tx) => {
+  await transaction(['kv', 'games', 'history', 'attempts', 'reviews', 'livegame'], 'readwrite', (tx) => {
     tx.objectStore('kv').clear();
     tx.objectStore('games').clear();
     tx.objectStore('history').clear();
     tx.objectStore('attempts').clear();
     tx.objectStore('reviews').clear();
+    tx.objectStore('livegame').clear();
   });
+}
+
+/** Persist the unfinished-game snapshot (null clears it). Single-slot by design. */
+export async function saveLiveGame(state: unknown): Promise<void> {
+  await requestTransaction('livegame', 'readwrite', (store) => store.put(state, LIVE_GAME_KEY));
+}
+export async function getLiveGame(): Promise<unknown | null> {
+  return requestTransaction<unknown>('livegame', 'readonly', (store) => store.get(LIVE_GAME_KEY));
+}
+
+export async function clearLiveGame(): Promise<void> {
+  await requestTransaction('livegame', 'readwrite', (store) => store.delete(LIVE_GAME_KEY));
 }
 
 /** Persist the in-progress assessment snapshot (null clears it). */
@@ -329,12 +349,14 @@ function isSettings(value: unknown): value is Partial<Settings> {
   if (value.engineTier !== undefined && !['lite', 'full'].includes(String(value.engineTier))) return false;
   if (value.pieceSet !== undefined && !['cburnett', 'staunty', 'merida'].includes(String(value.pieceSet))) return false;
   if (value.boardTheme !== undefined && !['walnut', 'marine', 'slate'].includes(String(value.boardTheme))) return false;
+  if (value.autoQueen !== undefined && typeof value.autoQueen !== 'boolean') return false;
+  if (value.showCoords !== undefined && typeof value.showCoords !== 'boolean') return false;
   return value.lastOpponentRating === undefined || finiteNumber(value.lastOpponentRating);
 }
 
 function isGame(value: unknown): value is GameRecord {
   return isObject(value) && finiteNumber(value.ts) &&
-    ['cpu', 'assessment'].includes(String(value.type)) && ['w', 'b'].includes(String(value.color)) &&
+    ['cpu', 'assessment', 'passplay'].includes(String(value.type)) && ['w', 'b'].includes(String(value.color)) &&
     ['win', 'loss', 'draw', 'abandoned'].includes(String(value.result)) &&
     typeof value.movesUci === 'string' && typeof value.startFen === 'string' &&
     finiteNumber(value.opponentRating) && ['lite', 'full'].includes(String(value.opponentTier)) &&

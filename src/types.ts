@@ -2,9 +2,25 @@
 
 export type EngineTier = 'lite' | 'full';
 
-export type GameType = 'cpu' | 'assessment';
+export type GameType = 'cpu' | 'assessment' | 'passplay';
 export type GameResult = 'win' | 'loss' | 'draw' | 'abandoned';
 export type Color = 'w' | 'b';
+
+/** Time control: increment seconds are added after each completed move. */
+export interface TimeControl {
+  /** Clock start in seconds (0 = untimed). */
+  base: number;
+  /** Increment per move in seconds. */
+  inc: number;
+}
+
+export const TIME_CONTROLS: readonly { id: string; label: string; tc: TimeControl }[] = [
+  { id: 'unlimited', label: 'No clock', tc: { base: 0, inc: 0 } },
+  { id: 'bullet', label: '3+0 · bullet', tc: { base: 180, inc: 0 } },
+  { id: 'blitz', label: '5+3 · blitz', tc: { base: 300, inc: 3 } },
+  { id: 'rapid', label: '10+0 · rapid', tc: { base: 600, inc: 0 } },
+  { id: 'classic', label: '15+10 · classical', tc: { base: 900, inc: 10 } },
+];
 
 export interface Profile {
   rating: number;
@@ -67,6 +83,8 @@ export interface Settings {
   lastOpponentRating?: number;
   pieceSet: PieceSet;
   boardTheme: BoardTheme;
+  autoQueen: boolean;
+  showCoords: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -76,4 +94,6 @@ export const DEFAULT_SETTINGS: Settings = {
   engineTier: 'lite',
   pieceSet: 'cburnett',
   boardTheme: 'walnut',
+  autoQueen: true,
+  showCoords: true,
 };
