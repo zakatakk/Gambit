@@ -36,11 +36,15 @@
   --safe-top: max(16px, env(safe-area-inset-top, 0px));
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 
-  /* Board fits the viewport height too, so an in-progress game never needs
-   * to scroll on a phone: clock, captures, status, and move list take the
-   * rest (roughly 400px of chrome). Floor keeps tiny phones playable; idle
-   * menu screens may still scroll, which is fine. */
-  --board-size: min(92vw, 470px, max(240px, calc(100dvh - 400px)));
+  /* Board fits the viewport height too, so every screen (game included) fits
+   * without scrolling: clock, captures, status, and move list take the rest
+   * (~420px of chrome). Floor keeps tiny phones playable. */
+  --board-size: min(92vw, 470px, max(240px, calc(100dvh - 420px)));
+
+  /* Compact controls used on dense screens (stats, settings, play). */
+  --data-pad-y: 10px;
+  --list-pad: 7px;
+}
 }
 html[data-theme='dark'] {
   --paper: #191611;
@@ -315,6 +319,14 @@ body {
   overflow-x: clip;
 }
 
+/* Per-screen vertical rhythm: one viewport per screen, no scrolling. */
+body[data-screen='home'] #app { padding-bottom: 10px; }
+body[data-screen='stats'] #app,
+body[data-screen='settings'] #app { padding-bottom: 6px; }
+body[data-screen='analysis'] #app,
+body[data-screen='puzzles'] #app,
+body[data-screen='play'] #app { padding-bottom: 8px; }
+
 /* Every screen uses the same centered content column and horizontal gutter. */
 .section,
 .game-top,
@@ -336,7 +348,7 @@ body {
   padding-left: var(--page-gutter);
   padding-right: var(--page-gutter);
 }
-.section { padding-left: 0; padding-right: 0; }
+.section { padding-left: 0; padding-right: 0; padding: var(--data-pad-y) 0 12px; }
 
 /* ---------- type ---------- */
 h1, h2, h3 {
@@ -387,7 +399,7 @@ button, .btn {
   background: var(--panel);
   border: 1px solid var(--rule-2);
   border-radius: var(--radius-btn);
-  padding: 11px 16px;
+  padding: 9px 14px;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   transition: border-color 0.12s ease;
@@ -400,7 +412,12 @@ button.primary {
   font-weight: 600;
 }
 button.primary:active { filter: brightness(0.92); color: var(--accent-ink); }
-button.small { padding: 5px 10px; font-size: 0.82rem; }
+button.small { padding: 4px 9px; font-size: 0.8rem; }
+body[data-screen='stats'] button,
+body[data-screen='settings'] button,
+body[data-screen='play'] button { padding: 8px 12px; font-size: 0.9rem; }
+body[data-screen='stats'] button.small,
+body[data-screen='settings'] button.small { padding: 4px 9px; }
 button.danger { color: var(--bad); border-color: var(--bad); }
 button:disabled { opacity: 0.45; }
 button.quiet { border-color: transparent; background: none; color: var(--ink-2); }
@@ -412,10 +429,10 @@ input[type='range'] { width: 100%; accent-color: var(--accent); height: 34px; }
 select, input[type='number'] {
   font: inherit; font-size: 0.92rem;
   color: var(--ink); background: var(--panel);
-  border: 1px solid var(--rule-2); border-radius: var(--radius-btn); padding: 7px 10px;
+  border: 1px solid var(--rule-2); border-radius: var(--radius-btn); padding: 5px 8px;
   max-width: 62%;
 }
-.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--rule); }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: var(--list-pad) 0; border-bottom: 1px solid var(--rule); }
 .row:last-child { border-bottom: none; }
 
 .switch { position: relative; width: 44px; height: 26px; flex: none; }
@@ -475,13 +492,25 @@ body.sidebar-open .menu-handle { visibility: hidden; }
 }
 .eval-bar > div { background: var(--paper); height: 100%; transition: width 0.3s ease; }
 .eval-label { font-family: var(--mono); font-size: 0.8rem; color: var(--ink-2); min-width: 4ch; }
-.analysis-line { font-size: 0.85rem; margin: 6px 0 0; padding: 0 var(--page-gutter); }
+.analysis-line { font-size: 0.85rem; margin: 4px 0 0; padding: 0 var(--page-gutter); }
+body[data-screen='analysis'] .move-list { max-height: 44px; line-height: 1.55; font-size: 0.8rem; }
+/* Compact hero: the board is the hero here. */
+.analysis-hero { padding: 4px var(--page-gutter) 8px; border-bottom: none; }
+body[data-screen='analysis'] .hero h1 { font-size: 1.45rem; }
+/* Flex column: the board takes its dvh-driven size, the config panel absorbs
+ * exactly the leftover space (scrolling internally) at any viewport height. */
+body[data-screen='analysis'] #app > div { display: flex; flex-direction: column; height: 100%; }
+body[data-screen='analysis'] .board-wrap { flex: 0 0 auto; }
+body[data-screen='analysis'] .tray { flex: 0 0 auto; }
+body[data-screen='analysis'] .status-bar { flex: 0 0 auto; margin: 0; }
+body[data-screen='analysis'] .analysis-config { flex: 1 1 0; min-height: 80px; overflow-y: auto; overscroll-behavior: contain; }
 .analysis-board { padding-bottom: 2px; }
 
-/* position editor tray */
+/* position editor tray: one scrollable row so edit mode still fits one screen */
 .tray {
-  display: none; flex-wrap: wrap; gap: 6px; align-items: center;
-  padding: 8px var(--page-gutter) 2px;
+  display: none; flex-wrap: nowrap; gap: 6px; align-items: center;
+  padding: 6px var(--page-gutter) 2px;
+  overflow-x: auto; overscroll-behavior: contain;
 }
 .tray .tray-piece, .tray .tray-trash {
   width: 40px; height: 40px; padding: 3px; line-height: 1;
@@ -494,12 +523,38 @@ body.sidebar-open .menu-handle { visibility: hidden; }
 .nav-row { padding-top: 2px; }
 
 /* Settings example board: a live preview of the chosen pieces + palette. */
-.preview-wrap { --board-size: min(62vw, 230px); padding: 12px var(--page-gutter) 4px; }
+.preview-wrap { --board-size: min(52vw, 190px); padding: 8px var(--page-gutter) 4px; }
 .preview-wrap .board { touch-action: auto; }
 .preview-wrap .coord { display: none; }
 
+/* ---------- settings: collapsible panels so everything fits one screen ---------- */
+.settings-panel { border-bottom: 1px solid var(--rule); padding: 0; }
+.settings-panel > summary {
+  list-style: none; display: flex; align-items: center; justify-content: space-between;
+  padding: 7px 2px; cursor: pointer; user-select: none; -webkit-user-select: none;
+}
+.settings-panel > summary::-webkit-details-marker { display: none; }
+.settings-panel .p-title { font-family: var(--serif); font-size: 1.02rem; font-weight: 600; }
+.settings-panel .p-arrow { color: var(--ink-3); font-size: 0.8rem; transition: transform 0.15s ease; }
+.settings-panel[open] .p-arrow { transform: rotate(90deg); }
+.settings-panel .panel-body { padding: 2px 0 8px; }
+.settings-panel > .panel-body > button { width: 100%; margin: 5px 0; }
+.settings-reset-style { margin-top: 6px; }
+/* Preview board scales with the viewport so Appearance still fits small phones. */
+body[data-screen='settings'] .preview-wrap { --board-size: min(52vw, 170px, max(110px, calc(100dvh - 520px))); padding: 6px var(--page-gutter) 4px; }
+@media (max-height: 600px) { body[data-screen='settings'] .preview-wrap { display: none; } }
+/* Appearance selects: two columns keeps the whole panel compact. */
+.appearance-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 16px; }
+.appearance-grid .row { padding: 7px 0; }
+
 /* ---------- board ---------- */
-.board-wrap { display: flex; justify-content: center; width: 100%; padding: 10px var(--page-gutter) 6px; }
+.board-wrap { display: flex; justify-content: center; width: 100%; padding: 6px var(--page-gutter) 4px; }
+/* Idle play menu + in-game shrink the board so the whole page always fits
+ * (clocks, captures, status, move list, and controls take the rest). */
+body[data-screen='play'] .board-wrap { --board-size: min(86vw, 340px, max(180px, calc(100dvh - 460px))); }
+body[data-screen='analysis'] .board-wrap { --board-size: min(80vw, 300px, max(170px, calc(100dvh - 390px))); }
+/* Position-editor tray adds a row under the board; trade 60px off the board. */
+body[data-screen='analysis'].editing .board-wrap { --board-size: min(80vw, 300px, max(140px, calc(100dvh - 450px))); }
 .board {
   width: min(var(--board-size), 100%);
   height: auto;
@@ -659,8 +714,34 @@ body.viewing .status-bar { opacity: 0.55; }
   margin: 4px auto;
 }
 .spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.5; }
-.list-tile { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--rule); font-size: 0.9rem; }
+.list-tile { display: flex; justify-content: space-between; gap: 10px; padding: var(--list-pad) 0; border-bottom: 1px solid var(--rule); font-size: 0.85rem; }
 .list-tile:last-child { border-bottom: none; }
+
+/* ---------- stats: compact head + two-column grid, one viewport ---------- */
+.stats-head { border-bottom: 1px solid var(--rule-2); margin-bottom: 2px; }
+.stats-hero { padding-top: 2px; padding-bottom: 4px; border-bottom: none; }
+.stats-hero h1 { font-size: 1.7rem; }
+.rating-big { font-family: var(--serif); font-size: 2.6rem; font-weight: 700; line-height: 1; }
+.rd-badge { font-family: var(--mono); font-size: 0.72rem; color: var(--ink-3); margin-left: 8px; }
+.stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; align-items: start; }
+.stat-tile { padding: 8px 0 6px; border-bottom: 1px solid var(--rule); min-width: 0; }
+.stats-grid > .stat-tile:last-child { border-bottom: none; }
+.stat-tile-wide { grid-column: 1 / -1; }
+.stat-line { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--rule); font-size: 0.85rem; }
+.stat-line:last-child { border-bottom: none; }
+.stat-empty { font-size: 0.85rem; margin: 2px 0; }
+body[data-screen='stats'] .spark { height: 44px; margin: 2px auto 0; }
+body[data-screen='stats'] .moment-tile { padding: 6px 0; }
+body[data-screen='stats'] .moment-tile .chip { display: none; }
+/* Ultra-short viewports: drop the sparkline, cap the lists with inner scrolls. */
+@media (max-height: 620px) {
+  body[data-screen='stats'] .spark { display: none; }
+  body[data-screen='stats'] .stat-list,
+  body[data-screen='stats'] .stat-openings { max-height: 66px; overflow-y: auto; }
+  body[data-screen='puzzles'] .board-wrap { --board-size: min(80vw, 470px, max(180px, calc(100dvh - 420px))); }
+  body[data-screen='puzzles'] .puzzle-hero { padding-top: 12px; }
+  body[data-screen='analysis'] .board-wrap { --board-size: min(80vw, 300px, max(140px, calc(100dvh - 390px))); }
+}
 
 /* ---------- review ---------- */
 .review { max-height: 78vh; overflow-y: auto; padding: 2px; min-width: 0; }

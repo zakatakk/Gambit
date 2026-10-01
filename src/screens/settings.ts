@@ -1,4 +1,5 @@
-/** Settings: preferences, engine tier, difficulty override, and data management. */
+/** Settings: preferences, engine tier, difficulty override, and data management.
+ * Screens are collapsible panels so the whole page fits one phone viewport. */
 import { Chess } from 'chess.js';
 import { Board } from '../board';
 import { getSettings, updateSettings, getProfile, updateProfile, exportData, importData, clearAll, getSavedAssessment } from '../db';
@@ -56,8 +57,8 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
   });
 
   const tierSelect = el('select', {},
-    el('option', { value: 'lite' }, 'Lite (small download, ~2350 max)'),
-    el('option', { value: 'full' }, 'Full NNUE (40MB, strongest)')) as HTMLSelectElement;
+    el('option', { value: 'lite' }, 'Lite (~2350 max)'),
+    el('option', { value: 'full' }, 'Full NNUE (40MB)')) as HTMLSelectElement;
   tierSelect.value = settings.engineTier;
   tierSelect.addEventListener('change', () => {
     void (async () => {
@@ -102,7 +103,7 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
   });
 
   const themeSelect = el('select', {},
-    el('option', { value: 'system' }, 'Follow system'),
+    el('option', { value: 'system' }, 'System'),
     el('option', { value: 'dark' }, 'Dark'),
     el('option', { value: 'light' }, 'Light')) as HTMLSelectElement;
   themeSelect.value = settings.theme;
@@ -157,41 +158,62 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
     el('button', { onclick: () => doReassess(mode) },
       mode === 'probe' ? 'Re-assess · puzzles + games' : mode === 'ladder' ? 'Re-assess · full ladder' : 'Re-assess · quick scan'));
   const resetButton = el('button', { class: 'danger', onclick: () => void doReset() }, 'Erase everything');
+  const resetStyleButton = el('button', { class: 'small settings-reset-style', onclick: () => void resetStyle() }, 'Reset all styles');
 
   container.append(
-    el('div', { class: 'section' },
-      el('h2', {}, 'Appearance'),
-      el('div', { class: 'row' }, el('span', {}, 'Style'), styleSelect),
-      el('div', { class: 'row' }, el('span', {}, 'Theme'), themeSelect),
-      el('div', { class: 'row' }, el('span', {}, 'Accent'), accentSelect),
-      el('div', { class: 'row' }, el('span', {}, 'Pieces'), pieceSelect),
-      el('div', { class: 'row' }, el('span', {}, 'Board'), boardSelect),
+    panel('Appearance', 'appearance',
+      el('div', { class: 'appearance-grid' },
+        row('Style', styleSelect),
+        row('Theme', themeSelect),
+        row('Accent', accentSelect),
+        row('Pieces', pieceSelect),
+        row('Board', boardSelect),
+        row('Sounds', soundSwitch)),
       preview.el.parentElement as HTMLElement,
-      el('div', { class: 'row' }, el('span', {}, 'Sounds'), soundSwitch)),
-    el('div', { class: 'section' },
-      el('h2', {}, 'Difficulty'),
-      el('div', { class: 'row' }, el('span', {}, 'Opponent rating'), opponentLabel),
+      resetStyleButton),
+    panel('Difficulty', 'difficulty',
+      row('Opponent rating', opponentLabel),
       opponentSlider,
-      el('div', { class: 'row' }, el('span', {}, 'Engine'), tierSelect)),
-    el('div', { class: 'section' },
-      el('h2', {}, 'Gameplay'),
-      el('div', { class: 'row' }, el('span', {}, 'Strict mode'), strictSwitch),
-      el('div', { class: 'row' }, el('span', {}, 'Always promote to queen'), autoQueenSwitch),
-      el('div', { class: 'row' }, el('span', {}, 'Board coordinates'), coordsSwitch)),
-    el('div', { class: 'section' },
-      el('h2', {}, 'Rating'),
+      row('Engine', tierSelect)),
+    panel('Gameplay', 'gameplay',
+      row('Strict mode', strictSwitch),
+      row('Always promote to queen', autoQueenSwitch),
+      row('Board coordinates', coordsSwitch)),
+    panel('Rating', 'rating',
       el('p', { class: 'muted', style: 'margin-top:0' },
         `${Math.round(profile.rating)} ±${Math.round(profile.rd)}${profile.assessed ? '' : ' · not assessed'}`),
       ...reassessButtons),
-    el('div', { class: 'section' },
-      el('h2', {}, 'Data'),
+    panel('Data', 'data',
       el('p', { class: 'tiny', style: 'margin-top:0' }, 'Stored on this device only.'),
       el('div', { class: 'btn-row' }, exportButton, importButton),
       importInput,
       el('div', { class: 'btn-row' }, resetButton)),
-    el('div', { class: 'section' },
-      el('p', { class: 'tiny', style: 'margin:0' }, 'Glicko-2 rating · Stockfish engine (GPL) · Lichess puzzles (CC0)'))
+    el('p', { class: 'tiny center', style: 'margin:10px 0' },
+      'Glicko-2 rating · Stockfish engine (GPL) · Lichess puzzles (CC0)')
   );
+
+  /** Collapsible section: keeps every settings group on one screen.
+   * Opening one panel closes the others, so the page never grows tall. */
+  function panel(title: string, id: string, ...children: Node[]): HTMLDetailsElement {
+    const details = el('details', { class: `settings-panel settings-${id}` }) as HTMLDetailsElement;
+    if (id === 'appearance') details.setAttribute('open', '');
+    details.addEventListener('toggle', () => {
+      if (!details.open) return;
+      for (const other of document.querySelectorAll('details.settings-panel[open]')) {
+        if (other !== details) (other as HTMLDetailsElement).open = false;
+        else other.classList.add('open');
+      }
+    });
+    const summary = el('summary', {},
+      el('span', { class: 'p-title' }, title),
+      el('span', { class: 'p-arrow', 'aria-hidden': 'true' }, '▸'));
+    details.append(summary, el('div', { class: 'panel-body' }, ...children));
+    return details;
+  }
+
+  function row(label: string, control: HTMLElement): HTMLElement {
+    return el('div', { class: 'row' }, el('span', {}, label), control);
+  }
 
   async function updateSetting<K extends 'theme' | 'sounds' | 'strictMode' | 'pieceSet' | 'boardTheme' | 'skin' | 'accent' | 'autoQueen' | 'showCoords'>(
     key: K,
@@ -203,6 +225,28 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       if (container.isConnected) apply?.(value);
     } catch (error) {
       if (container.isConnected) toast(`Could not save setting: ${(error as Error).message}`);
+    }
+  }
+
+  async function resetStyle(): Promise<void> {
+    if (!confirm('Reset style, theme, accent, pieces, and board colors to defaults?')) return;
+    try {
+      await updateSettings({ skin: 'classic', theme: 'system', accent: 'oxblood', pieceSet: 'cburnett', boardTheme: 'walnut' });
+      if (!container.isConnected) return;
+      applySkin('classic');
+      applyTheme('system');
+      applyAccent('oxblood');
+      applyPieceSet('cburnett');
+      applyBoardTheme('walnut');
+      styleSelect.value = 'classic';
+      themeSelect.value = 'system';
+      accentSelect.value = 'oxblood';
+      pieceSelect.value = 'cburnett';
+      boardSelect.value = 'walnut';
+      preview.render();
+      toast('Styles reset.');
+    } catch (error) {
+      if (container.isConnected) toast(`Could not reset styles: ${(error as Error).message}`);
     }
   }
 
@@ -236,7 +280,12 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       applyPieceSet(importedSettings.pieceSet);
       applyBoardTheme(importedSettings.boardTheme);
       setSoundsEnabled(importedSettings.sounds);
-      toast('Data imported.');
+      styleSelect.value = importedSettings.skin;
+      themeSelect.value = importedSettings.theme;
+      accentSelect.value = importedSettings.accent;
+      pieceSelect.value = importedSettings.pieceSet;
+      boardSelect.value = importedSettings.boardTheme;
+      preview.render();
       toast('Data imported.');
       await app.refreshRating();
     } catch (error) {

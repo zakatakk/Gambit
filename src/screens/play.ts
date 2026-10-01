@@ -236,7 +236,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     modeLabel);
   const statusBar = el('div', { class: 'status-bar' }, '');
   const moveList = el('div', { class: 'move-list' }, '—');
-  const controls = el('div', { class: 'section' });
+  const controls = el('div', { class: 'section play-controls' });
   const seekRow = el('div', { class: 'seek-row btn-row' },
     el('button', { onclick: () => showPly(0) }, 'Start'),
     el('button', { onclick: () => showPly((viewingPly ?? historyVerbose().length) - 1) }, 'Prev'),
@@ -260,7 +260,6 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     controls
   );
   container.appendChild(wrap);
-
   // ---------- clocks + captured material ----------
   function stopClockTimer(): void {
     if (clockTimer !== undefined) clearInterval(clockTimer);

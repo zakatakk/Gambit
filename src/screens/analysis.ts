@@ -77,15 +77,15 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
   const redoButton = el('button', { onclick: () => stepHistory(1) }, 'Redo');
 
   container.append(
-    el('div', { class: 'hero' },
+    el('div', { class: 'hero analysis-hero' },
       el('div', { class: 'brand' }, el('h1', {}, 'Analysis')),
       el('div', { class: 'analysis-eval' }, evalBar, evalLabel)),
     boardHost,
-    el('div', { class: 'nav-row btn-row' }, undoButton, redoButton, flipButton),
     lineLabel,
     moveList,
     tray,
-    el('div', { class: 'section' },
+    el('div', { class: 'section analysis-config' },
+      el('div', { class: 'btn-row' }, undoButton, redoButton, flipButton),
       el('div', { class: 'btn-row' }, editButton, turnButton, resetButton, clearButton),
       el('div', { class: 'row' }, fenInput, loadButton),
       el('div', { class: 'btn-row' }, copyButton),
@@ -97,11 +97,14 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
   container.addEventListener('screen-dispose', () => {
     disposed = true;
     generation++;
+    document.body.classList.remove('editing');
     engine.cancelSearch();
   }, { once: true });
 
   function setEditMode(on: boolean): void {
     editMode = on;
+    // Flag lets CSS shrink the board so the extra tray row still fits one screen.
+    document.body.classList.toggle('editing', on);
     board.setEditMode(on);
     editButton.classList.toggle('active', on);
     tray.style.display = on ? 'flex' : 'none';

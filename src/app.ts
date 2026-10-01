@@ -44,6 +44,8 @@ async function render(app: App, params?: Record<string, unknown>): Promise<void>
   const mount = el('div');
   appEl.appendChild(mount);
   current = mount;
+  // Per-screen density hook: lets CSS compact each screen so it fits one viewport.
+  document.body.dataset.screen = tabToRender;
 
   try {
     switch (tabToRender) {

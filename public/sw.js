@@ -1,18 +1,32 @@
 /* Gambit service worker: offline shell + asset caching. */
 const BASE = new URL(self.registration.scope).pathname;
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4';
 const SCOPE_ID = BASE.replace(/^\/+|\/+$/g, '').replace(/[^\w-]/g, '_') || 'root';
 const CACHE_PREFIX = `gambit-${SCOPE_ID}-`;
 const CACHE = CACHE_PREFIX + CACHE_VERSION;
 const LEGACY_CACHE = `gambit-${(self.registration.scope.match(/[\w-]+\/?$/) || ['v1'])[0].replace('/', '')}`;
 const SHELL = [BASE, `${BASE}index.html`, `${BASE}manifest.webmanifest`, `${BASE}icons/icon.svg`];
+
+/* Everything the app needs offline, fetched at install so the first session
+ * on a fresh device already works with no signal: puzzle bundle, all piece
+ * sets, and the lite engine. The 40MB full NNUE engine stays opt-in via the
+ * in-app download. Precache failures are tolerated (allSettled): a blocked
+ * asset falls back to the cache-first fetch path once it is requested. */
+const PIECE_TYPES = ['K', 'Q', 'R', 'B', 'N', 'P'];
+const PRECACHE = [
+  `${BASE}data/puzzles.json`,
+  `${BASE}engine/stockfish.js`,
+  `${BASE}engine/stockfish.wasm`,
+  ...['cburnett', 'staunty', 'merida'].flatMap((set) =>
+    ['w', 'b'].flatMap((color) => PIECE_TYPES.map((type) => `${BASE}pieces/${set}/${color}${type}.svg`))),
+];
 const CACHE_FIRST_PREFIXES = ['engine/', 'data/', 'icons/', 'pieces/']
   .map((path) => new URL(path, self.registration.scope).pathname);
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE)
-      .then((cache) => Promise.allSettled(SHELL.map((url) => cache.add(url))))
+      .then((cache) => Promise.allSettled([...SHELL, ...PRECACHE].map((url) => cache.add(url))))
       .then(() => self.skipWaiting())
   );
 });
