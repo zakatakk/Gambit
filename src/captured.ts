@@ -4,7 +4,8 @@ import type { Chess } from 'chess.js';
 
 const PIECE_VALUE: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9 };
 const START_COUNT: Record<string, number> = { p: 8, n: 2, b: 2, r: 2, q: 1 };
-const ORDER = ['q', 'r', 'b', 'n', 'p'] as const;
+/** Piece types largest-first; exported for consumers that render capture tallies. */
+export const ORDER = ['q', 'r', 'b', 'n', 'p'] as const;
 
 export interface CapturedSummary {
   /** Missing black pieces — what White captured, largest first. */

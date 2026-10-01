@@ -296,7 +296,7 @@ html[data-theme='dark'][data-board='slate'] {
 /* The body never scrolls: #app is the only scroll container, so short pages
  * cannot rubber-band (iOS standalone) and long ones scroll inside the frame. */
 html, body { height: 100%; overflow: hidden; }
-html { background: var(--paper); }
+html { background: var(--paper); -webkit-text-size-adjust: 100%; /* stop iOS font-boosting from inflating dense blocks */ }
 body {
   margin: 0;
   background: var(--paper);
@@ -651,9 +651,13 @@ body.viewing .status-bar { opacity: 0.55; }
 .clock-bar .clock b { font-family: var(--sans); font-size: 0.62rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
 .clock-bar .clock.active { color: var(--ink); border-color: var(--accent); }
 .captured-bar { display: none; justify-content: space-between; gap: 8px; margin: 4px 0 0; min-height: 20px; }
-.captured-bar .captured-side { display: flex; align-items: center; gap: 0; min-height: 20px; }
+.captured-bar .captured-side { display: flex; align-items: center; gap: 0; min-height: 20px; min-width: 0; }
 .captured-bar .captured-side b { font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2); margin: 0 4px; }
-.captured-bar .captured-row img { width: 18px; height: 18px; margin-right: -5px; display: block; opacity: 0.9; }
+/* One horizontal strip: the img is display:block, so the row itself must be
+ * flex — otherwise every captured piece stacks on its own line (~400px tall). */
+.captured-bar .captured-row { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 1px; min-width: 0; max-width: 48vw; overflow: hidden; }
+.captured-bar .captured-row img { width: 18px; height: 18px; margin-right: -5px; flex: 0 0 auto; display: block; opacity: 0.9; }
+.captured-bar .captured-count { font-family: var(--mono); font-size: 0.66rem; color: var(--ink-3); margin: 0 5px 0 -1px; white-space: nowrap; }
 
 /* puzzle practice */
 .practice-bar { justify-content: flex-start; }

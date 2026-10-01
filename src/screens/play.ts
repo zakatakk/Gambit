@@ -8,7 +8,7 @@ import { ratePeriod } from '../glicko2';
 import { getProfile, getSettings, updateSettings, addGame, updateGame, updateProfile, getSavedAssessment, saveSavedAssessment, getLiveGame, saveLiveGame, clearLiveGame, getReview } from '../db';
 import { applyBoardTheme, applyPieceSet, pieceImg } from '../pieces';
 import { ChessClock, formatClock } from '../clock';
-import { capturedSummary } from '../captured';
+import { capturedSummary, ORDER as CAPTURED_ORDER } from '../captured';
 import { detectOpening } from '../openings';
 import { serializeLiveGame, deserializeLiveGame, type SavedLiveGame } from '../liveGame';
 import { play } from '../sounds';
@@ -305,8 +305,17 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     const armyColor: Color = topColor === 'w' ? 'b' : 'w';
     const topDiff = topColor === 'w' ? summary.balance : -summary.balance;
     const row = (types: string[]) => {
+      // Group repeats: one piece image + a ×N tally (♟×8 ♘×2) instead of a
+      // long strip of duplicate icons.
+      const counts = new Map<string, number>();
+      for (const type of types) counts.set(type, (counts.get(type) ?? 0) + 1);
       const span = el('span', { class: 'captured-row' });
-      for (const type of types) span.appendChild(pieceImg(type, armyColor));
+      for (const type of CAPTURED_ORDER) {
+        const count = counts.get(type);
+        if (!count) continue;
+        span.appendChild(pieceImg(type, armyColor));
+        if (count > 1) span.appendChild(el('span', { class: 'captured-count' }, `×${count}`));
+      }
       return span;
     };
     capturedBar.replaceChildren(
