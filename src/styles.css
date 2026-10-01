@@ -742,9 +742,15 @@ body[data-screen='stats'] .moment-tile .chip { display: none; }
   body[data-screen='stats'] .spark { display: none; }
   body[data-screen='stats'] .stat-list,
   body[data-screen='stats'] .stat-openings { max-height: 66px; overflow-y: auto; }
-  body[data-screen='puzzles'] .board-wrap { --board-size: min(80vw, 470px, max(180px, calc(100dvh - 420px))); }
+  body[data-screen='puzzles'] .board-wrap { --board-size: min(80vw, 470px, max(160px, calc(100dvh - 420px))); }
   body[data-screen='puzzles'] .puzzle-hero { padding-top: 12px; }
   body[data-screen='analysis'] .board-wrap { --board-size: min(80vw, 300px, max(140px, calc(100dvh - 390px))); }
+  /* Play: tighter board floor and chrome so even 320x568 fits. */
+  body[data-screen='play'] .board-wrap { --board-size: min(86vw, 340px, max(140px, calc(100dvh - 465px))); }
+  body[data-screen='play'] button { padding: 5px 9px; }
+  body[data-screen='play'] .btn-row { margin: 3px 0; }
+  body[data-screen='play'] .move-list { max-height: 56px; }
+  body[data-screen='play'] .section { padding-top: 8px; padding-bottom: 8px; }
 }
 
 /* ---------- review ---------- */
