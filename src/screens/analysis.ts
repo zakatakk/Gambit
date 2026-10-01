@@ -1,10 +1,10 @@
 /**
  * Analysis: study board with a live eval bar, engine best line, FEN loading,
- * and a Lichess-style position editor (place/remove pieces anywhere, choose
- * the side to move). Boards share the real Board component.
+ * and a Lichess-style position editor (piece pockets, tap to place, drag to
+ * move, drag off the board to delete). Boards share the real Board component.
  */
 import { Chess } from 'chess.js';
-import { Board } from '../board';
+import { Board, boardSquareAt, type EditBrush } from '../board';
 import { engine } from '../engineClient';
 import { getSettings } from '../db';
 import { applyBoardTheme, applyPieceSet, pieceImg } from '../pieces';
@@ -17,6 +17,7 @@ const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 const EMPTY_FEN = '8/8/8/8/8/8/8/8 w - - 0 1';
 
 const TRAY_PIECES = ['k', 'q', 'r', 'b', 'n', 'p'] as const;
+const FILES_BY_INDEX = 'abcdefgh';
 
 export async function mountAnalysis(container: HTMLElement, _app: App): Promise<void> {
   const settings = await getSettings();
@@ -44,8 +45,6 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
   const lineLabel = el('div', { class: 'analysis-line muted' }, 'Move a piece or load a FEN to analyze.');
   const statusLine = el('div', { class: 'status-bar' }, '');
   const moveList = el('div', { class: 'move-list' }, '—');
-  const tray = el('div', { class: 'tray' });
-  const turnButton = el('button', { class: 'small' }, 'White to move');
 
   const board = new Board(boardHost, game, {
     orientation: 'w',
@@ -65,13 +64,23 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
       onPositionChanged(true);
     },
   });
+  board.setBrushResolver(() => brush as EditBrush);
+
+  // ---- edit-mode furniture (hidden unless editing) -----------------------
+  const pockets = el('div', { class: 'pockets' });
+  const pocketBtns: Record<string, HTMLButtonElement> = {};
+  const editBar = el('div', { class: 'edit-bar' });
+  const castlingButton = el('button', { class: 'edit-chip on', onclick: () => toggleCastling() }, 'Castling');
+  const epButton = el('button', { class: 'edit-chip on', onclick: () => toggleEnPassant() }, 'En passant');
+  const turnButton = el('button', { class: 'edit-chip on', onclick: () => toggleTurn() }, 'White to move');
+  const editCopyButton = el('button', { class: 'edit-chip', onclick: () => void copyFen() }, 'Copy FEN');
 
   const fenInput = el('input', { type: 'text', placeholder: 'Paste a FEN to explore…' }) as HTMLInputElement;
   const loadButton = el('button', { onclick: () => loadFen() }, 'Load FEN');
   const flipButton = el('button', { onclick: () => board.setOrientation(board.orientation === 'w' ? 'b' : 'w') }, 'Flip');
   const resetButton = el('button', { onclick: () => loadFenString(START_FEN) }, 'Start');
   const clearButton = el('button', { onclick: () => loadFenString(EMPTY_FEN, true) }, 'Clear');
-  const copyButton = el('button', { onclick: () => copyFen() }, 'Copy FEN');
+  const copyButton = el('button', { onclick: () => void copyFen() }, 'Copy FEN');
   const editButton = el('button', { class: 'edit-toggle', onclick: () => setEditMode(!editMode) }, 'Edit position');
   const undoButton = el('button', { onclick: () => stepHistory(-1) }, 'Undo');
   const redoButton = el('button', { onclick: () => stepHistory(1) }, 'Redo');
@@ -81,16 +90,17 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
       el('div', { class: 'brand' }, el('h1', {}, 'Analysis')),
       el('div', { class: 'analysis-eval' }, evalBar, evalLabel)),
     boardHost,
+    pockets,
+    editBar,
     lineLabel,
     moveList,
-    tray,
     el('div', { class: 'section analysis-config' },
       el('div', { class: 'btn-row' }, undoButton, redoButton, flipButton),
       el('div', { class: 'btn-row' }, editButton, turnButton, resetButton, clearButton),
       el('div', { class: 'row' }, fenInput, loadButton),
       el('div', { class: 'btn-row' }, copyButton),
       el('p', { class: 'tiny', style: 'margin:8px 0 0' },
-        'Analyze freely. In Edit position: tap a piece to place it, tap a square with a brush to add, drag pieces anywhere, right-click (or long-press then trash) to remove.')),
+        'Analyze freely. In Edit position: tap a pocket piece, then tap squares to place it — tap again on the same piece to remove it. Drag pieces to move them; drag off the board to delete. Pick Clear, then tap pieces to delete.')),
     statusLine
   );
 
@@ -101,42 +111,203 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     engine.cancelSearch();
   }, { once: true });
 
+  function renderPockets(): void {
+    pockets.replaceChildren();
+    for (const color of ['w', 'b'] as const) {
+      const row = el('div', { class: `pocket-row pocket-${color}` });
+      for (const type of TRAY_PIECES) {
+        const key = `${color}${type}`;
+        const btn = el('button', { class: 'pocket-piece', 'aria-label': `${color === 'w' ? 'White' : 'Black'} ${type}` });
+        btn.appendChild(pieceImg(type, color));
+        const piece = { color, type };
+        btn.addEventListener('click', () => {
+          brush = piece;
+          syncPocketSelection();
+        });
+        // Press arms the tool AND starts a drag: pull the piece straight onto
+        // the board, or release in place to just arm it for tap-to-place.
+        btn.addEventListener('pointerdown', (e) => startPocketDrag(e as PointerEvent, piece));
+        pocketBtns[key] = btn;
+        row.appendChild(btn);
+      }
+      pockets.appendChild(row);
+    }
+    const clearBtn = el('button', { class: 'pocket-clear', 'aria-label': 'Clear tool — tap pieces to delete' }, 'Clear');
+    clearBtn.addEventListener('click', () => {
+      brush = 'trash';
+      syncPocketSelection();
+    });
+    pocketBtns.trash = clearBtn;
+    pockets.appendChild(clearBtn);
+    syncPocketSelection();
+  }
+
+  /** Press on a pocket piece: arm it, and if the press becomes a drag, carry
+   * the piece onto the board (drop = place). Release in place = just armed. */
+  function startPocketDrag(e: PointerEvent, piece: { color: Color; type: string }): void {
+    if (document.body.classList.contains('dragging-piece')) return;
+    brush = piece;
+    syncPocketSelection();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let ghost: HTMLElement | null = null;
+    const onMove = (ev: PointerEvent): void => {
+      if (!ghost && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 6) return;
+      if (!ghost) {
+        ghost = el('div', { class: 'drag-ghost' });
+        ghost.appendChild(pieceImg(piece.type, piece.color));
+        document.body.appendChild(ghost);
+        document.body.classList.add('dragging-piece');
+      }
+      positionGhost(ghost, ev.clientX, ev.clientY);
+      const sq = boardSquareFromPoint(ev.clientX, ev.clientY);
+      highlightDropTarget(sq);
+      if (ev.cancelable) ev.preventDefault();
+    };
+    const onUp = (ev: PointerEvent): void => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      document.body.classList.remove('dragging-piece');
+      if (!ghost) return; // press without drag: the click event arms the tool
+      ghost.remove();
+      ghost = null;
+      const sq = boardSquareFromPoint(ev.clientX, ev.clientY);
+      if (sq) {
+        brush = piece;
+        placePiece(piece, sq);
+      }
+    };
+    const onCancel = (): void => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      document.body.classList.remove('dragging-piece');
+      if (ghost) {
+        ghost.remove();
+        ghost = null;
+      }
+    };
+    window.addEventListener('pointermove', onMove, { passive: false });
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+  }
+
+  function positionGhost(ghost: HTMLElement, x: number, y: number): void {
+    ghost.style.left = `${x}px`;
+    ghost.style.top = `${y}px`;
+  }
+
+  function boardSquareFromPoint(x: number, y: number): string | null {
+    const rect = board.el.getBoundingClientRect();
+    const size = rect.width;
+    const col = Math.floor(((x - rect.left) / size) * 8);
+    const row = Math.floor(((y - rect.top) / size) * 8);
+    if (col < 0 || col > 7 || row < 0 || row > 7) return null;
+    return boardSquareAt(row, col, board.orientation);
+  }
+
+  function highlightDropTarget(sq: string | null): void {
+    for (const cell of board.el.querySelectorAll('.square')) {
+      cell.classList.remove('over');
+    }
+    if (sq) board.el.querySelector(`.square[data-sq="${sq}"]`)?.classList.add('over');
+  }
+
+  function syncPocketSelection(): void {
+    for (const [key, btn] of Object.entries(pocketBtns)) {
+      const active =
+        (brush === 'trash' && key === 'trash') ||
+        (brush !== null && brush !== 'trash' && key === `${brush.color}${brush.type}`);
+      btn.classList.toggle('active', active);
+    }
+  }
+
+  function renderEditBar(): void {
+    editBar.replaceChildren(
+      el('span', { class: 'edit-hint' }, 'Tap board to place · drag to move · drag off to remove'),
+      el('span', { class: 'edit-controls' }, castlingButton, epButton, turnButton, editCopyButton));
+  }
+
   function setEditMode(on: boolean): void {
     editMode = on;
-    // Flag lets CSS shrink the board so the extra tray row still fits one screen.
+    // Flag lets CSS shrink the board so pockets + edit bar still fit one screen.
     document.body.classList.toggle('editing', on);
     board.setEditMode(on);
     editButton.classList.toggle('active', on);
-    tray.style.display = on ? 'flex' : 'none';
-    turnButton.style.display = on ? '' : 'none';
-    if (on) renderTray();
-  }
-
-  function renderTray(): void {
-    tray.replaceChildren();
-    for (const color of ['w', 'b'] as const) {
-      for (const type of TRAY_PIECES) {
-        const btn = el('button', { class: 'tray-piece' });
-        btn.appendChild(pieceImg(type, color));
-        btn.addEventListener('click', () => {
-          brush = { color, type };
-          [...tray.querySelectorAll('.tray-piece')].forEach((b) => b.classList.remove('active'));
-          btn.classList.add('active');
-        });
-        tray.appendChild(btn);
-      }
+    pockets.style.display = on ? 'grid' : 'none';
+    editBar.style.display = on ? 'flex' : 'none';
+    if (on) {
+      if (!brush) brush = { color: 'w', type: 'p' };
+      renderPockets();
+      renderEditBar();
+      syncEditChips();
     }
-    const trash = el('button', { class: 'tray-trash', title: 'Remove pieces' }, 'Trash');
-    trash.addEventListener('click', () => {
-      brush = 'trash';
-      [...tray.querySelectorAll('.tray-piece, .tray-trash')].forEach((b) => b.classList.remove('active'));
-      trash.classList.add('active');
-    });
-    tray.appendChild(trash);
   }
 
-  /** Editor actions from the Board: taps place the brush, drags relocate, right-click removes. */
-  function handleEdit(action: { type: 'tap' | 'move' | 'remove'; from?: string; to?: string }): void {
+  function syncEditChips(): void {
+    const parts = game.fen().split(' ');
+    const castles = parts[2];
+    castlingButton.classList.toggle('on', castles !== '-');
+    epButton.classList.toggle('on', parts[3] !== '-');
+    const white = game.turn() === 'w';
+    turnButton.textContent = white ? 'White to move' : 'Black to move';
+    turnButton.classList.toggle('on', white);
+  }
+
+  function toggleCastling(): void {
+    const parts = game.fen().split(' ');
+    parts[2] = parts[2] === '-' ? 'KQkq' : '-';
+    game.load(parts.join(' '));
+    board.render();
+    syncEditChips();
+  }
+
+  function toggleEnPassant(): void {
+    const parts = game.fen().split(' ');
+    if (parts[3] !== '-') {
+      parts[3] = '-';
+    } else {
+      const ep = plausibleEpSquare(game.turn());
+      if (!ep) {
+        toast('Line up a pawn next to an enemy pawn (rank 4/5) to enable en passant.');
+        return;
+      }
+      parts[3] = ep;
+    }
+    game.load(parts.join(' '));
+    board.render();
+    syncEditChips();
+  }
+
+  /** A plausible en-passant target for `turn`: an enemy pawn that could have
+   * just double-pushed, with one of our pawns beside it. */
+  function plausibleEpSquare(turn: Color): string | null {
+    const rows = game.board();
+    // White to move: black pawn on rank 5 (row idx 3) beside a white pawn.
+    const rowIdx = turn === 'w' ? 3 : 4;
+    const epRank = turn === 'w' ? '6' : '3';
+    const row = rows[rowIdx];
+    if (!row) return null;
+    const enemy = turn === 'w' ? 'b' : 'w';
+    for (let f = 0; f < 8; f++) {
+      const sq = row[f];
+      if (!sq || sq.color !== enemy || sq.type !== 'p') continue;
+      const left = f > 0 ? row[f - 1] : null;
+      const right = f < 7 ? row[f + 1] : null;
+      const beside = [left, right].some((p) => p && p.color === turn && p.type === 'p');
+      if (beside) return `${FILES_BY_INDEX[f]}${epRank}`;
+    }
+    return null;
+  }
+
+  function toggleTurn(): void {
+    swapTurn(game.turn() === 'w' ? 'b' : 'w');
+  }
+
+  /** Editor actions from the Board: taps place the brush, drags relocate,
+   * tap-with-trash or drag-off-board removes, contextmenu clears the square. */
+  function handleEdit(action: { type: 'tap' | 'move' | 'remove' | 'clear'; from?: string; to?: string }): void {
     if (action.type === 'move' && action.from && action.to) {
       relocate(action.from, action.to);
       return;
@@ -145,12 +316,23 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
       removeAt(action.from);
       return;
     }
+    if (action.type === 'clear' && action.from) {
+      clearAt(action.from);
+      return;
+    }
     if (action.type === 'tap' && action.to) {
       if (brush === 'trash') {
         removeAt(action.to);
         return;
       }
-      if (brush) placePiece(brush, action.to);
+      if (!brush) return;
+      // Same piece tapped again toggles it off — quick delete gesture.
+      const existing = game.get(action.to as never);
+      if (existing && existing.color === brush.color && existing.type === brush.type) {
+        removeAt(action.to);
+        return;
+      }
+      placePiece(brush, action.to);
     }
   }
 
@@ -158,6 +340,11 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     past.push(game.fen());
     if (past.length > 200) past.shift();
     future.length = 0;
+  }
+
+  /** Extra FEN fields (turn, castling, ep) survive free-form edits. */
+  function editFenParts(): string[] {
+    return game.fen().split(' ');
   }
 
   /** Apply a piece map (square -> FEN letter) to the live game, tolerating
@@ -183,8 +370,8 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
       if (empty) row += String(empty);
       rows.push(row);
     }
-    const parts = game.fen().split(' ');
-    const candidate = `${rows.join('/')} ${parts[1]} - - 0 1`;
+    const parts = editFenParts();
+    const candidate = `${rows.join('/')} ${parts[1]} ${parts[2]} ${parts[3]} 0 1`;
     const snapshot = game.fen();
     try {
       game.load(candidate);
@@ -227,6 +414,12 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
       past.pop();
       toast('Position not loadable (needs both kings, legal checks).');
     }
+  }
+
+  /** Unconditional removal (contextmenu / trash drag target). */
+  function clearAt(from: string): void {
+    if (!game.get(from as never)) return;
+    removeAt(from);
   }
 
   function relocate(from: string, to: string): void {
@@ -298,17 +491,8 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     play('move');
     board.render();
     renderMoves(byLegalMove);
-    renderTurn();
+    if (editMode) syncEditChips();
     scheduleAnalysis();
-  }
-
-  function renderTurn(): void {
-    const white = game.turn() === 'w';
-    turnButton.textContent = white ? 'White to move' : 'Black to move';
-    turnButton.onclick = () => {
-      const flipped = white ? 'b' : 'w';
-      swapTurn(flipped);
-    };
   }
 
   function swapTurn(turn: Color): void {

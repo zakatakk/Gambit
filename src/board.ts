@@ -11,12 +11,19 @@ export interface BoardOptions {
   /** Show file/rank coordinates on the board edges (Settings). */
   showCoords?: boolean;
   /** Position-editor hook: free placement, any-piece drags, removals. */
-  onEdit?: (action: { type: 'tap' | 'move' | 'remove'; from?: string; to?: string }) => void;
+  onEdit?: (action: { type: 'tap' | 'move' | 'remove' | 'clear'; from?: string; to?: string }) => void;
   onMove: (m: { from: string; to: string; promotion?: string }) => void;
 }
 
+/** The selected editor tool, resolved per interaction by the owning screen. */
+export type EditBrush = { color: Color; type: string } | 'trash' | null;
+
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'] as const;
 const RANKS = ['8', '7', '6', '5', '4', '3', '2', '1'] as const;
+
+/** A quick tap: released on the same square, barely moved, short press. */
+const TAP_MS = 280;
+const TAP_SLOP_PX = 9;
 
 export function boardSquareAt(row: number, col: number, orientation: Color): string {
   const white = orientation === 'w';
@@ -30,10 +37,12 @@ export class Board {
   private selected: Square | null = null;
   private pendingPromotion: { from: Square; to: string } | null = null;
   private dragging: { from: Square; ghost: HTMLElement } | null = null;
+  private dragStart: { x: number; y: number; t: number } | null = null;
   private lastMove: { from: string; to: string } | null = null;
   private previewFen: string | null = null;
   private previewLastMove: { from: string; to: string } | null = null;
   private editMode = false;
+  private brush: (() => EditBrush) | null = null;
   private squareEls = new Map<string, HTMLElement>();
 
   constructor(container: HTMLElement, game: Chess, opts: BoardOptions) {
@@ -46,7 +55,7 @@ export class Board {
       e.preventDefault();
       if (this.editMode && this.opts.onEdit) {
         const sq = this.sqFromPoint(e.clientX, e.clientY);
-        if (sq && this.game.get(sq as Square)) this.opts.onEdit({ type: 'remove', from: sq });
+        if (sq) this.opts.onEdit({ type: this.brush?.() === 'trash' ? 'clear' : 'remove', from: sq });
       }
     });
     // Capture retargets pointerup here — resolve from coordinates, not event target.
@@ -70,6 +79,11 @@ export class Board {
     this.editMode = on;
     this.selected = null;
     this.clearMarks();
+  }
+
+  /** The screen answers "what tool is armed right now?" for tap placement. */
+  setBrushResolver(resolve: () => EditBrush): void {
+    this.brush = resolve;
   }
 
   setLastMove(m: { from: string; to: string } | null): void {
@@ -172,12 +186,36 @@ export class Board {
   private onBoardPointerUp(e: PointerEvent): void {
     const sq = this.sqFromPoint(e.clientX, e.clientY);
     if (this.dragging) {
-      if (!sq || sq === this.dragging.from) {
-        this.cancelDrag();
-      } else {
-        this.tryDrop(sq);
-      }
+      const { from, ghost } = this.dragging;
+      const start = this.dragStart;
+      this.dragging = null;
+      this.dragStart = null;
+      ghost.remove();
+      for (const [, cell] of this.squareEls) cell.classList.remove('over');
       this.releasePointer(e);
+      if (this.editMode) {
+        if (!sq) {
+          // Dragged off the board — Lichess-style delete.
+          this.opts.onEdit?.({ type: 'clear', from });
+        } else if (sq !== from) {
+          this.opts.onEdit?.({ type: 'move', from, to: sq });
+        } else if (
+          start !== null &&
+          Date.now() - start.t < TAP_MS &&
+          Math.hypot(e.clientX - start.x, e.clientY - start.y) < TAP_SLOP_PX
+        ) {
+          // Quick tap on an occupied square: place/replace/toggle via the screen.
+          if (this.brush?.() === 'trash') this.opts.onEdit?.({ type: 'remove', from });
+          else this.opts.onEdit?.({ type: 'tap', to: sq });
+        }
+        return;
+      }
+      if (!sq || sq === from) return; // drop back on origin: keep selection (tap-tap)
+      const moved = this.attemptMove(from, sq, true);
+      if (moved && !this.pendingPromotion) {
+        this.clearMarks();
+        this.selected = null;
+      }
       return;
     }
     // Tap-tap: a selected piece + release on a legal target square.
@@ -197,30 +235,37 @@ export class Board {
     }
   }
 
-  private onPointerDown(e: PointerEvent, sq: string): void {
-    if (!this.opts.interactive || this.pendingPromotion || this.previewFen !== null) return;
-    if (this.editMode) {
-      const piece = this.game.get(sq as Square);
-      if (piece) {
-        try {
-          this.el.setPointerCapture?.(e.pointerId);
-        } catch {
-          /* synthetic pointers in tests have no active pointer */
-        }
-        this.startDrag(e, sq as Square, piece);
-      } else {
-        this.opts.onEdit?.({ type: 'tap', to: sq });
-      }
-      e.preventDefault();
-      return;
-    }
-    // Capture the pointer on the BOARD (not the square) so drags keep firing
-    // pointermove/pointerup at the board even if the finger leaves the cell.
+  private capturePointer(e: PointerEvent): void {
     try {
       this.el.setPointerCapture?.(e.pointerId);
     } catch {
       // Synthetic/inactive pointers (tests) have no active pointer — ignore.
     }
+  }
+
+  private onPointerDown(e: PointerEvent, sq: string): void {
+    if (!this.opts.interactive || this.pendingPromotion || this.previewFen !== null) return;
+    if (!e.isPrimary) return; // pinch/second finger must not hijack a drag
+    if (this.editMode) {
+      e.preventDefault();
+      const piece = this.game.get(sq as Square);
+      if (piece) {
+        // Any piece can be picked up and dragged, brush or not.
+        this.capturePointer(e);
+        this.startDrag(e, sq as Square, piece);
+        return;
+      }
+      const b = this.brush?.();
+      if (b && b !== 'trash') {
+        // Drag the armed piece out of the pocket, or tap to stamp it below.
+        this.capturePointer(e);
+        this.startDrag(e, sq as Square, b);
+      }
+      return;
+    }
+    // Capture the pointer on the BOARD (not the square) so drags keep firing
+    // pointermove/pointerup at the board even if the finger leaves the cell.
+    this.capturePointer(e);
     const piece = this.game.get(sq as Square);
     const myColor: Color = this.game.turn();
     if (piece && piece.color === myColor) {
@@ -245,6 +290,7 @@ export class Board {
     ghost.appendChild(pieceImg(piece.type, piece.color));
     document.body.appendChild(ghost);
     this.dragging = { from, ghost };
+    this.dragStart = { x: e.clientX, y: e.clientY, t: Date.now() };
     this.moveGhost(e);
   }
 
@@ -261,32 +307,11 @@ export class Board {
     if (this.dragging) this.moveGhost(e);
   }
 
-  private tryDrop(sq: string): void {
-    if (!this.dragging) return;
-    const { from, ghost } = this.dragging;
-    this.dragging = null;
-    ghost.remove();
-    for (const [, cell] of this.squareEls) cell.classList.remove('over');
-    if (this.editMode) {
-      if (sq && sq !== from) this.opts.onEdit?.({ type: 'move', from, to: sq });
-      else if (!sq) this.opts.onEdit?.({ type: 'remove', from }); // dragged off the board
-      return;
-    }
-    if (sq && sq !== from) {
-      const moved = this.attemptMove(from, sq, true);
-      if (moved && !this.pendingPromotion) {
-        this.clearMarks();
-        this.selected = null;
-      }
-      return;
-    }
-    // Drop back on origin: keep selection (tap-tap still available).
-  }
-
   private cancelDrag(): void {
     if (this.dragging) {
       this.dragging.ghost.remove();
       this.dragging = null;
+      this.dragStart = null;
       for (const [, cell] of this.squareEls) cell.classList.remove('over');
     }
   }
