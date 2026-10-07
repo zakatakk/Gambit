@@ -72,6 +72,7 @@ export async function mountPuzzles(container: HTMLElement, _app: App): Promise<v
     interactive: false,
     autoQueen: appearance.autoQueen,
     showCoords: appearance.showCoords,
+    markup: true,
     onMove: (move) => void onMove(move),
   });
   const boardHost = el('div', { class: 'board-wrap' }, board.el);
@@ -245,6 +246,7 @@ export async function mountPuzzles(container: HTMLElement, _app: App): Promise<v
       });
       if (!played) throw new Error(`Invalid opening move in puzzle ${puzzle.id}`);
       game.load(position.fen());
+      board.clearMarkup();
       board.setOrientation(position.turn());
       board.setLastMove({ from: opponentMove.slice(0, 2), to: opponentMove.slice(2, 4) });
       board.setInteractive(true);

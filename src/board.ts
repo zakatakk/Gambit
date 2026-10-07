@@ -12,6 +12,8 @@ export interface BoardOptions {
   showCoords?: boolean;
   /** Position-editor hook: free placement, any-piece drags, removals. */
   onEdit?: (action: { type: 'tap' | 'move' | 'remove' | 'clear'; from?: string; to?: string }) => void;
+  /** Right-click markup (mouse): highlights + arrows, toggle on/off. */
+  markup?: boolean;
   onMove: (m: { from: string; to: string; promotion?: string }) => void;
 }
 
@@ -43,14 +45,22 @@ export class Board {
   private previewLastMove: { from: string; to: string } | null = null;
   private editMode = false;
   private brush: (() => EditBrush) | null = null;
+  private markupOn = false;
+  /** Right-click markup state: square highlights + from>to arrows. */
+  private marks = new Set<string>();
+  private arrows = new Set<string>();
+  private markupDrag: { from: string; startX: number; startY: number; moved: boolean; cur: string } | null = null;
+  private overlaySvg: SVGSVGElement | null = null;
   private squareEls = new Map<string, HTMLElement>();
 
   constructor(container: HTMLElement, game: Chess, opts: BoardOptions) {
     this.game = game;
     this.opts = opts;
+    this.markupOn = opts.markup ?? false;
     this.el = document.createElement('div');
     this.el.className = 'board';
     container.appendChild(this.el);
+    this.el.addEventListener('pointermove', (e) => this.onPointerMove(e));
     this.el.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       if (this.editMode && this.opts.onEdit) {
@@ -147,6 +157,12 @@ export class Board {
         cell.addEventListener('pointercancel', () => this.cancelDrag());
       }
     }
+    const NS = 'http://www.w3.org/2000/svg';
+    this.overlaySvg = document.createElementNS(NS, 'svg');
+    this.overlaySvg.setAttribute('class', 'board-markup');
+    this.overlaySvg.setAttribute('viewBox', '0 0 8 8');
+    this.el.appendChild(this.overlaySvg);
+    this.drawMarkup();
   }
 
   /** Re-render pieces + highlights from live or preview position. */
@@ -185,6 +201,15 @@ export class Board {
   /** Board-level pointerup: handles drag drops (capture retargets here) and taps. */
   private onBoardPointerUp(e: PointerEvent): void {
     const sq = this.sqFromPoint(e.clientX, e.clientY);
+    if (this.markupDrag) {
+      this.finishMarkup(e, sq);
+      return;
+    }
+    if (e.button !== 0) {
+      // A stray non-primary release (context menu) must not tap/move pieces.
+      this.releasePointer(e);
+      return;
+    }
     if (this.dragging) {
       const { from, ghost } = this.dragging;
       const start = this.dragStart;
@@ -244,7 +269,13 @@ export class Board {
   }
 
   private onPointerDown(e: PointerEvent, sq: string): void {
-    if (!this.opts.interactive || this.pendingPromotion || this.previewFen !== null) return;
+    if (this.pendingPromotion) return;
+    if (e.button === 2) {
+      // Mouse right-click markup: handled on pointerup so drags draw arrows.
+      if (this.markupOn && !this.editMode) this.startMarkup(e, sq);
+      return;
+    }
+    if (!this.opts.interactive || this.previewFen !== null) return;
     if (!e.isPrimary) return; // pinch/second finger must not hijack a drag
     if (this.editMode) {
       e.preventDefault();
@@ -304,6 +335,15 @@ export class Board {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    if (this.markupDrag) {
+      const drag = this.markupDrag;
+      if (!drag.moved && Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > 8) drag.moved = true;
+      if (drag.moved) {
+        drag.cur = this.sqFromPoint(e.clientX, e.clientY) ?? drag.cur;
+        this.drawMarkup();
+      }
+      return;
+    }
     if (this.dragging) this.moveGhost(e);
   }
 
@@ -314,6 +354,112 @@ export class Board {
       this.dragStart = null;
       for (const [, cell] of this.squareEls) cell.classList.remove('over');
     }
+    if (this.markupDrag) {
+      this.markupDrag = null;
+      this.drawMarkup();
+    }
+  }
+
+  /** Right-click markup: press arms the gesture, release toggles a highlight
+   * on the square — or, after dragging to another square, toggles an arrow. */
+  private startMarkup(e: PointerEvent, sq: string): void {
+    e.preventDefault();
+    this.capturePointer(e);
+    this.markupDrag = { from: sq, startX: e.clientX, startY: e.clientY, moved: false, cur: sq };
+    this.drawMarkup();
+  }
+
+  private finishMarkup(e: PointerEvent, to: string | null): void {
+    const drag = this.markupDrag;
+    this.markupDrag = null;
+    this.releasePointer(e);
+    if (!drag) return;
+    if (drag.moved && to && to !== drag.from) {
+      const key = `${drag.from}>${to}`;
+      if (this.arrows.has(key)) this.arrows.delete(key);
+      else this.arrows.add(key);
+    } else if (this.marks.has(drag.from)) {
+      this.marks.delete(drag.from);
+    } else {
+      this.marks.add(drag.from);
+    }
+    this.drawMarkup();
+  }
+
+  /** Clear all highlights and arrows (used when a fresh position loads). */
+  clearMarkup(): void {
+    if (this.marks.size === 0 && this.arrows.size === 0) return;
+    this.marks.clear();
+    this.arrows.clear();
+    this.drawMarkup();
+  }
+
+  /** Square top-left corner in overlay units (0..7), orientation-aware. */
+  private sqXY(sq: string): { x: number; y: number } {
+    const file = sq.charCodeAt(0) - 97;
+    const rank = Number(sq[1]);
+    const white = this.orientation === 'w';
+    return { x: white ? file : 7 - file, y: white ? 8 - rank : rank - 1 };
+  }
+
+  /** Redraw the markup overlay from the current marks/arrows sets. */
+  private drawMarkup(): void {
+    const svg = this.overlaySvg;
+    if (!svg) return;
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    const NS = 'http://www.w3.org/2000/svg';
+    const GREEN = '#15781B';
+    const mark = (sq: string): void => {
+      const { x, y } = this.sqXY(sq);
+      const c = document.createElementNS(NS, 'circle');
+      c.setAttribute('cx', String(x + 0.5));
+      c.setAttribute('cy', String(y + 0.5));
+      c.setAttribute('r', '0.44');
+      c.setAttribute('fill', 'none');
+      c.setAttribute('stroke', GREEN);
+      c.setAttribute('stroke-width', '0.09');
+      c.setAttribute('opacity', '0.9');
+      svg.appendChild(c);
+    };
+    const arrow = (from: string, to: string): void => {
+      const a = this.sqXY(from);
+      const b = this.sqXY(to);
+      const x1 = a.x + 0.5;
+      const y1 = a.y + 0.5;
+      const x2 = b.x + 0.5;
+      const y2 = b.y + 0.5;
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len;
+      const uy = dy / len;
+      const head = 0.5;
+      const bx = x2 - ux * head;
+      const by = y2 - uy * head;
+      const line = document.createElementNS(NS, 'line');
+      line.setAttribute('x1', String(x1));
+      line.setAttribute('y1', String(y1));
+      line.setAttribute('x2', String(bx));
+      line.setAttribute('y2', String(by));
+      line.setAttribute('stroke', GREEN);
+      line.setAttribute('stroke-width', '0.2');
+      line.setAttribute('opacity', '0.8');
+      svg.appendChild(line);
+      const tip = document.createElementNS(NS, 'polygon');
+      const px = -uy * 0.26;
+      const py = ux * 0.26;
+      tip.setAttribute('points', `${x2},${y2} ${bx + px},${by + py} ${bx - px},${by - py}`);
+      tip.setAttribute('fill', GREEN);
+      tip.setAttribute('opacity', '0.85');
+      svg.appendChild(tip);
+    };
+    for (const sq of this.marks) mark(sq);
+    for (const key of this.arrows) {
+      const [from, to] = key.split('>');
+      arrow(from, to);
+    }
+    const drag = this.markupDrag;
+    if (drag?.moved && drag.cur && drag.cur !== drag.from) arrow(drag.from, drag.cur);
   }
 
   private showLegal(sq: Square): void {

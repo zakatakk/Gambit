@@ -247,6 +247,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     interactive: false,
     autoQueen: settings.autoQueen,
     showCoords: settings.showCoords,
+    markup: true,
     onMove: (m) => void onUserMove(m),
   });
   const clockBar = el('div', { class: 'clock-bar' });
@@ -504,6 +505,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     game.load(START_FEN);
     board.setOrientation('w');
     board.setLastMove(null);
+    board.clearMarkup();
     board.setInteractive(true);
     board.deselect();
     viewingPly = null;
@@ -818,6 +820,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     clock = new ChessClock(timeControl, 'w');
     board.setOrientation(playerColor);
     board.setLastMove(null);
+    board.clearMarkup();
     board.setInteractive(false);
     board.deselect();
     viewingPly = null;

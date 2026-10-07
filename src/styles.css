@@ -581,6 +581,7 @@ body[data-screen='analysis'] .board-wrap { --board-size: min(80vw, 300px, max(17
 /* The editor (pockets + edit bar, ~130px) trades board height for its rows. */
 body[data-screen='analysis'].editing .board-wrap { --board-size: min(86vw, 380px, max(150px, calc(100dvh - 400px))); }
 .board {
+  position: relative;
   width: min(var(--board-size), 100%);
   height: auto;
   aspect-ratio: 1;
@@ -589,6 +590,11 @@ body[data-screen='analysis'].editing .board-wrap { --board-size: min(86vw, 380px
   outline: 3px solid var(--board-outline);
   outline-offset: -1px;
   touch-action: none; user-select: none; -webkit-user-select: none;
+}
+/* Right-click markup layer (mouse only): highlights + arrows above pieces. */
+.board-markup {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 3;
 }
 .square { position: relative; }
 .square.light { background: var(--board-light); }
