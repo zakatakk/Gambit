@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { EngineClient } from '../src/engineClient';
+import { describe, expect, it, vi } from 'vitest';
+import { EngineClient, pickMove } from '../src/engineClient';
 import { ratingToStrength } from '../src/engineStrength';
 import type { EngineStrengthParams } from '../src/engineProtocol';
 
@@ -122,5 +122,70 @@ describe('EngineClient depth-limited play', () => {
     expect(worker.messages).toContain('setoption name MultiPV value 20');
     expect(worker.messages).not.toContain('setoption name UCI_LimitStrength value true');
     expect(worker.messages.some((m) => m.startsWith('go movetime'))).toBe(false);
+  });
+});
+
+type InfoLines = Parameters<typeof pickMove>[0];
+const infoLine = (multipv: number, cp: number, move: string): InfoLines[number] =>
+  ({ multipv, cp, mate: null, depth: 8, pv: [move] });
+
+describe('pickMove blunder selection', () => {
+  // multipv ordering mirrors real engine output: scores descend with multipv.
+  const lines: InfoLines = [
+    infoLine(1, 100, 'e2e4'),
+    infoLine(2, 50, 'd2d4'),
+    infoLine(3, -2000, 'f2f3'),
+    infoLine(4, 20, 'g2g4'),
+  ];
+  const base = {
+    skill: 0,
+    limitedElo: null,
+    moveTime: 700,
+    blunderChance: 1,
+    blunderWindowCp: 320,
+    blunderFloorCp: -400,
+    randomCp: 0,
+  };
+
+  it('picks a weaker candidate inside the blunder window', () => {
+    const spy = vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    try {
+      expect(pickMove(lines, base)).toBe('g2g4');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('never blunders below the floor, even with a huge window', () => {
+    const spy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      const unlimited = { ...base, blunderWindowCp: 5000, blunderFloorCp: -5000 };
+      expect(pickMove(lines, unlimited)).toBe('f2f3');
+      const floored = { ...base, blunderWindowCp: 5000, blunderFloorCp: -400 };
+      expect(pickMove(lines, floored)).toBe('g2g4');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('window limits how far down the pool a blunder can reach', () => {
+    const spy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      const narrow = { ...base, blunderWindowCp: 50, blunderFloorCp: -5000 };
+      // 80cp-loss g2g4 is out of the window; only e2e4/d2d4 qualify.
+      expect(pickMove(lines, narrow)).toBe('d2d4');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('randomizes among near-best moves when not blundering', () => {
+    const spy = vi.spyOn(Math, 'random').mockReturnValue(0.9);
+    try {
+      const calm = { ...base, blunderChance: 0, randomCp: 60 };
+      expect(pickMove(lines, calm)).toBe('d2d4');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

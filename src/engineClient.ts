@@ -183,13 +183,14 @@ export function pickMove(lines: InfoLine[], strength: EngineStrengthParams): str
     : (line.cp ?? 0);
   const bestScore = score(candidates[0]);
 
+  const blunderWindow = strength.blunderWindowCp ?? 320;
+  const blunderFloor = strength.blunderFloorCp ?? -400;
+
   if ((strength.blunderChance ?? 0) > 0 && Math.random() < (strength.blunderChance ?? 0)) {
     const weaker = candidates.filter((line) => bestScore - score(line) <= blunderWindow && score(line) > blunderFloor);
     if (weaker.length > 1) return weaker[1 + Math.floor(Math.random() * (weaker.length - 1))].pv[0];
   }
 
-  const blunderWindow = strength.blunderWindowCp ?? 320;
-  const blunderFloor = strength.blunderFloorCp ?? -400;
   const window = strength.randomCp ?? 0;
   const nearBest = candidates.filter((line) => {
     const loss = bestScore - score(line);
