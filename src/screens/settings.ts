@@ -7,7 +7,7 @@ import { engine } from '../engineClient';
 import { ACCENTS, SKINS, applyAccent, applySkin, applyTheme } from '../theme';
 import { applyBoardTheme, applyPieceSet, BOARD_THEMES, PIECE_SETS } from '../pieces';
 import { setSoundsEnabled, play } from '../sounds';
-import { el, toast, switchControl, modal } from '../ui';
+import { el, toast, switchControl, modal, confirmSheet } from '../ui';
 import type { App } from '../app';
 import type { Settings, EngineTier } from '../types';
 
@@ -229,7 +229,12 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
   }
 
   async function resetStyle(): Promise<void> {
-    if (!confirm('Reset style, theme, accent, pieces, and board colors to defaults?')) return;
+    const ok = await confirmSheet({
+      title: 'Reset styles?',
+      message: 'Style, theme, accent, pieces, and board colors go back to defaults.',
+      confirmLabel: 'Reset styles',
+    });
+    if (!ok) return;
     try {
       await updateSettings({ skin: 'classic', theme: 'system', accent: 'oxblood', pieceSet: 'cburnett', boardTheme: 'walnut' });
       if (!container.isConnected) return;
@@ -299,7 +304,12 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
     void (async () => {
       try {
         const saved = await getSavedAssessment().catch(() => null);
-        if (saved && !confirm('Start a new assessment? Unfinished assessment progress will be discarded.')) return;
+        if (saved && !(await confirmSheet({
+          title: 'Start a new assessment?',
+          message: 'Unfinished assessment progress will be discarded.',
+          confirmLabel: 'Start new',
+          danger: true,
+        }))) return;
         await updateProfile({ assessed: false });
         if (!container.isConnected) return;
         toast(mode === 'quick' ? 'Quick scan starting…' : 'Fresh assessment starting…');
@@ -311,7 +321,13 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
   }
 
   async function doReset(): Promise<void> {
-    if (!confirm('Erase rating, games, and puzzle history? This cannot be undone.')) return;
+    const ok = await confirmSheet({
+      title: 'Erase everything?',
+      message: 'Rating, games, and puzzle history will be deleted. This cannot be undone.',
+      confirmLabel: 'Erase everything',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await clearAll();
       if (!container.isConnected) return;

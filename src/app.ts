@@ -98,12 +98,27 @@ export function bootApp(): void {
     document.body.classList.toggle('sidebar-open', open);
     handle.setAttribute('aria-expanded', String(open));
     sidebar.inert = !open;
+    // The drawer is modal: the page behind it is inert while it is open.
+    appEl.inert = open;
     // Opening moves focus into the menu; closing returns it to the menu button.
     if (open && !wasOpen) sidebar.querySelector<HTMLButtonElement>('button.active')?.focus();
     if (!open && wasOpen) handle.focus();
   }
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') setSidebar(false);
+    if (e.key !== 'Tab' || !document.body.classList.contains('sidebar-open')) return;
+    // Keep Tab cycling inside the open drawer instead of leaving it.
+    const items = [...sidebar.querySelectorAll<HTMLButtonElement>('button')];
+    const first = items[0];
+    const last = items[items.length - 1];
+    const focusInside = sidebar.contains(document.activeElement);
+    if (e.shiftKey && (!focusInside || document.activeElement === first)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (!focusInside || document.activeElement === last)) {
+      e.preventDefault();
+      first.focus();
+    }
   });
 
   const app: App = {

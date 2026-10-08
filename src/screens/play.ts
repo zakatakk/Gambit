@@ -12,7 +12,7 @@ import { capturedSummary, ORDER as CAPTURED_ORDER } from '../captured';
 import { detectOpening } from '../openings';
 import { serializeLiveGame, deserializeLiveGame, type SavedLiveGame } from '../liveGame';
 import { play } from '../sounds';
-import { el, modal, toast } from '../ui';
+import { el, modal, toast, confirmSheet } from '../ui';
 import type { App } from '../app';
 import type { Color, EngineTier, GameResult, GameRecord, PuzzleItem } from '../types';
 import { TIME_CONTROLS, UNTIMED, type TimeControl } from '../types';
@@ -693,9 +693,17 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
         } }, 'Flip board'),
         isPassPlay
           ? el('button', { onclick: () => {
-              if (confirm('End this game? White wins by resignation.')) finishPassPlay('w', 'resignation');
+              void (async () => {
+                const ok = await confirmSheet({
+                  title: 'Resign as Black?',
+                  message: 'White wins by resignation.',
+                  confirmLabel: 'Resign',
+                  danger: true,
+                });
+                if (ok && container.isConnected) finishPassPlay('w', 'resignation');
+              })();
             } }, 'Resign as Black')
-          : el('button', { onclick: () => resign() }, 'Resign'),
+          : el('button', { onclick: () => void resign() }, 'Resign'),
         allowHelpers ? el('button', { onclick: () => void hint() }, 'Hint') : null,
         allowHelpers ? el('button', { onclick: () => takeback() }, 'Takeback') : null)
     );
@@ -1141,8 +1149,18 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     setStatus('Takeback — your move.');
   }
 
-  function resign(): void {
-    if (gameType === 'passplay' || (mode !== 'game' && mode !== 'ladder')) return;
+  /** Rated and ladder games count resignation as a loss, so ask first. */
+  async function resign(): Promise<void> {
+    const canResign = (): boolean => gameType !== 'passplay' && (mode === 'game' || mode === 'ladder');
+    if (!canResign()) return;
+    const ok = await confirmSheet({
+      title: 'Resign this game?',
+      message: 'Resigning counts as a loss.',
+      confirmLabel: 'Resign',
+      danger: true,
+    });
+    // The game may have ended while the sheet was open.
+    if (!ok || !container.isConnected || !canResign()) return;
     finishGame('resignation', 'loss');
   }
 
@@ -1163,7 +1181,12 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
 
   async function startAssessment(chosenMode: 'probe' | 'ladder' | 'quick' = 'probe'): Promise<void> {
     if (container.isConnected && controls.dataset.resumable === '1') {
-      const proceed = confirm('Start a new assessment? The unfinished one will be discarded.');
+      const proceed = await confirmSheet({
+        title: 'Start a new assessment?',
+        message: 'The unfinished one will be discarded.',
+        confirmLabel: 'Start new',
+        danger: true,
+      });
       if (!proceed) return;
     }
     const generation = ++probeGeneration;
