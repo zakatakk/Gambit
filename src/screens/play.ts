@@ -469,7 +469,9 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       el('h2', {}, 'New game'),
       el('div', { class: 'row' }, el('span', {}, 'Time control'), tcSelect),
       el('div', { class: 'row' }, el('span', {}, 'Your color'), colorSelect),
-      el('p', { class: 'tiny' }, 'Games of 10+0 or slower are rated.'),
+      el('p', { class: 'tiny' }, assessed
+        ? 'Games of 10+0 or slower are rated.'
+        : 'Casual until you establish a rating. Finish an assessment to make games rated.'),
       el('div', { class: 'btn-row' },
         el('button', { class: 'primary', onclick: () => {
           const entry = TIME_CONTROLS.find((tc) => tc.id === tcSelect.value) ?? TIME_CONTROLS[0];
@@ -665,6 +667,8 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
         el('button', { onclick: () => void startAssessment('ladder') }, 'Full ladder')),
       el('div', { class: 'btn-row' },
         el('button', { onclick: () => void startAssessment('quick') }, 'Quick scan')),
+      el('div', { class: 'btn-row' },
+        el('button', { onclick: () => showGameSetup() }, 'Casual game vs CPU')),
       el('p', { class: 'tiny', style: 'margin:8px 0 0' },
         'You can re-run any assessment later from Settings.'),
       el('div', { class: 'row', style: 'margin-top:8px' },

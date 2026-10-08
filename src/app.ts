@@ -87,13 +87,20 @@ export function bootApp(): void {
     class: 'menu-handle',
     'aria-label': 'Open menu',
     'aria-expanded': 'false',
-    onclick: () => setSidebar(document.body.classList.toggle('sidebar-open')),
+    onclick: () => setSidebar(!document.body.classList.contains('sidebar-open')),
   }, menuIcon());
   document.body.append(handle, sidebar, scrim);
+  // Off-screen links must not take keyboard focus until the menu is open.
+  sidebar.inert = true;
 
   function setSidebar(open: boolean): void {
+    const wasOpen = document.body.classList.contains('sidebar-open');
     document.body.classList.toggle('sidebar-open', open);
     handle.setAttribute('aria-expanded', String(open));
+    sidebar.inert = !open;
+    // Opening moves focus into the menu; closing returns it to the menu button.
+    if (open && !wasOpen) sidebar.querySelector<HTMLButtonElement>('button.active')?.focus();
+    if (!open && wasOpen) handle.focus();
   }
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') setSidebar(false);
@@ -102,8 +109,7 @@ export function bootApp(): void {
   const app: App = {
     navigate(tab, params) {
       activeTab = tab;
-      document.body.classList.remove('sidebar-open');
-      handle.setAttribute('aria-expanded', 'false');
+      setSidebar(false);
       void render(app, params);
     },
     refreshRating() {
