@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { rate } from '../src/glicko2';
+import { rate, ratePeriod } from '../src/glicko2';
 import {
   priorFromPuzzles,
   nextLevel,
   assessmentDone,
   newAssessment,
   LADDER_DEFAULT_PRIOR,
+  serializeAssessment,
+  deserializeAssessment,
 } from '../src/assessment';
 
 /** Mirrors the ladder's batched recompute: every game re-scored from the prior. */
@@ -13,6 +15,44 @@ function batchedLadder(prior: { rating: number; rd: number }, scores: (0 | 0.5 |
   const matches = scores.map((score, i) => ({ oppRating: oppRatings[i], oppRd: 60, score }));
   return rate({ rating: prior.rating, rd: prior.rd, volatility: 0.06, lastPlayed: 0 }, matches, 0);
 }
+
+describe('Glicko-2', () => {
+  it('matches Glickman’s published example', () => {
+    const result = rate({
+      rating: 1500,
+      rd: 200,
+      volatility: 0.06,
+      lastPlayed: 0,
+    }, [
+      { oppRating: 1400, oppRd: 30, score: 1 },
+      { oppRating: 1550, oppRd: 100, score: 0 },
+      { oppRating: 1700, oppRd: 300, score: 0 },
+    ], 0);
+
+    // The exact implementation result is 1464.05067; the paper rounds this
+    // to 1464.06 while some independent implementations retain the exact value.
+    expect(result.rating).toBeCloseTo(1464.05067, 4);
+    expect(result.rd).toBeCloseTo(151.51652, 4);
+    expect(result.volatility).toBeCloseTo(0.059996, 5);
+  });
+
+  it('validates inputs rather than returning a poisoned rating', () => {
+    const state = { rating: 1500, rd: 200, volatility: 0.06, lastPlayed: 0 };
+    expect(() => rate(state, [{ oppRating: 1500, oppRd: 60, score: 2 }], 0)).toThrow(RangeError);
+    expect(() => rate(state, [{ oppRating: 1500, oppRd: 0, score: 0.5 }], 0)).toThrow(RangeError);
+    expect(() => rate({ ...state, volatility: Number.NaN }, [], 0)).toThrow(RangeError);
+  });
+
+  it('supports assessment batches as one rating period', () => {
+    const prior = { rating: 1200, rd: 300, volatility: 0.06, lastPlayed: 0 };
+    const matches = [
+      { oppRating: 1200, oppRd: 60, score: 1 },
+      { oppRating: 1400, oppRd: 60, score: 0 },
+    ] as const;
+    expect(ratePeriod(prior, [...matches], 0)).toEqual(rate(prior, [...matches], 0));
+    expect(ratePeriod(prior, [], 0)).toEqual({ ...prior, lastPlayed: 0 });
+  });
+});
 
 describe('assessment', () => {
   it('all-losses run drops far below the prior with tight RD (true performance)', () => {
@@ -126,9 +166,69 @@ describe('assessment', () => {
   it('ladder/quick default prior is 1200 ±300', () => {
     expect(LADDER_DEFAULT_PRIOR.rating).toBe(1200);
     expect(LADDER_DEFAULT_PRIOR.rd).toBe(300);
-    const s = newAssessment('ladder');
-    expect(s.phase).toBe('games');
-    const q = newAssessment('quick');
-    expect(q.phase).toBe('games');
+    expect(newAssessment('ladder').mode).toBe('ladder');
+    expect(newAssessment('quick').mode).toBe('quick');
+  });
+});
+
+describe('assessment save/restore', () => {
+  it('round-trips a ladder snapshot', () => {
+    const state = newAssessment('ladder');
+    state.prior = { rating: 1200, rd: 300 };
+    state.currentLevel = 3;
+    state.games.push({ level: 2, result: 'win' }, { level: 3, result: 'loss' });
+    state.matches.push({ oppRating: 1200, score: 1 }, { oppRating: 1400, score: 0 });
+
+    const restored = deserializeAssessment(JSON.parse(JSON.stringify(serializeAssessment(state))));
+    expect(restored).not.toBeNull();
+    expect(restored!.mode).toBe('ladder');
+    expect(restored!.prior).toEqual({ rating: 1200, rd: 300 });
+    expect(restored!.currentLevel).toBe(3);
+    expect(restored!.games).toEqual(state.games);
+    expect(restored!.matches).toEqual(state.matches);
+    expect(restored!.puzzles).toEqual([]);
+  });
+
+  it('round-trips probe puzzle progress', () => {
+    const state = newAssessment('probe');
+    state.puzzles = [
+      { id: 'p1', won: true, score: 1, mistakes: 0, fen: '', moves: [], rating: 1200, rd: 0, popularity: 0, themes: [] },
+      { id: 'p2', won: false, score: 0, mistakes: 3, fen: '', moves: [], rating: 1300, rd: 0, popularity: 0, themes: [] },
+      { id: 'p3', fen: '', moves: [], rating: 1400, rd: 0, popularity: 0, themes: [] },
+    ];
+
+    const restored = deserializeAssessment(JSON.parse(JSON.stringify(serializeAssessment(state))));
+    expect(restored).not.toBeNull();
+    expect(restored!.puzzles).toHaveLength(3);
+    expect(restored!.puzzles[0]).toMatchObject({ id: 'p1', won: true, score: 1, mistakes: 0 });
+    expect(restored!.puzzles[1]).toMatchObject({ id: 'p2', won: false, score: 0, mistakes: 3 });
+    expect(restored!.puzzles[2]).toMatchObject({ id: 'p3' });
+    expect(restored!.puzzles[2].won).toBeUndefined();
+  });
+
+  it('rejects unknown versions and corrupt payloads', () => {
+    const state = newAssessment('ladder');
+    state.prior = { rating: 1200, rd: 300 };
+    const saved = serializeAssessment(state);
+    const corrupt = (patch: Record<string, unknown>) =>
+      JSON.parse(JSON.stringify({ ...saved, ...patch }));
+
+    expect(deserializeAssessment(null)).toBeNull();
+    expect(deserializeAssessment(undefined)).toBeNull();
+    expect(deserializeAssessment(corrupt({ version: 99 }))).toBeNull();
+    expect(deserializeAssessment(corrupt({ mode: 'wild' }))).toBeNull();
+    expect(deserializeAssessment(corrupt({ prior: { rating: 'x' } }))).toBeNull();
+    expect(deserializeAssessment(corrupt({ games: [{ level: 'two', result: 'win' }] }))).toBeNull();
+    expect(deserializeAssessment(corrupt({ matches: [{ oppRating: 'low', score: 1 }] }))).toBeNull();
+    expect(deserializeAssessment(corrupt({ puzzles: 'nope' }))).toBeNull();
+  });
+
+  it('keeps rating math independent of snapshot storage', () => {
+    const state = newAssessment('ladder');
+    state.prior = { rating: 1200, rd: 300 };
+    state.games.push({ level: 2, result: 'win' });
+    state.matches.push({ oppRating: 1200, score: 1 });
+    const restored = deserializeAssessment(serializeAssessment(state))!;
+    expect(restored.matches).toEqual([{ oppRating: 1200, score: 1 }]);
   });
 });

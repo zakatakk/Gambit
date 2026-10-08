@@ -1,39 +1,38 @@
-/** Deep post-game review: eval every position, classify moves, find critical moments. */
+/** Deep post-game review: evaluate positions, classify moves, and find critical moments. */
 import { Chess } from 'chess.js';
 import { engine } from './engineClient';
 import {
   winPct,
+  mateScoreValue,
   classify,
   winDrop,
   moveAccuracy,
   aggregateAccuracy,
   phaseSpans,
-  CLS_ORDER,
   type MoveCls,
   type MoveEval,
 } from './reviewScoring';
 import { isBookLine } from './book';
 import type { GameRecord } from './types';
 
-const ANALYSE_MS = 220; // per position; a 60-ply game ≈ 15s — tunable
+const ANALYSE_MS = 220;
 
 export interface PlyReview {
-  ply: number; // 1-based ply (1 = white's first move)
+  ply: number;
   san: string;
   uci: string;
   fenBefore: string;
   moverIsWhite: boolean;
   cls: MoveCls;
-  /** true when the move follows known opening theory (no accuracy penalty) */
   book: boolean;
   winDrop: number;
   moveAccuracy: number;
-  /** white-POV eval before this move (cp), for the eval graph */
   evalBeforeCp: number;
+  evalBeforeMate: number | null;
   evalAfterCp: number;
+  evalAfterMate: number | null;
   bestUci: string;
   bestSan: string;
-  /** top alternatives at the position (uci + cp white POV), best first */
   alternatives: { uci: string; cp: number; san?: string }[];
   pieceCount: number;
 }
@@ -50,127 +49,167 @@ export interface DeepReview {
   plies: PlyReview[];
   white: PlayerReview;
   black: PlayerReview;
-  evalGraph: { ply: number; cp: number }[]; // position evals, ply 0 = start
-  criticalMoments: PlyReview[]; // big swings, chronological
+  evalGraph: { ply: number; cp: number }[];
+  criticalMoments: PlyReview[];
   openingLabel: string;
 }
 
-async function analysePosition(fen: string): Promise<{ cp: number; best: string; bestSan: string; alts: { uci: string; cp: number; san?: string }[] }> {
-  // Collect every distinct PV head the engine reports (info lines stream at
-  // increasing depth; first-seen order = engine ranking, best first).
-  const whiteToMove = new Chess(fen).turn() === 'w';
-  const seen = new Set<string>();
-  const lines: { uci: string; cp: number; san?: string }[] = [];
-  await engine.analyse(fen, ANALYSE_MS, (cpStm, pv) => {
-    const head = pv[0];
-    if (head && !seen.has(head)) {
-      seen.add(head);
-      lines.push({ uci: head, cp: cpStm, san: sanOfFen(fen, head) });
-    }
-  });
-  const whitePov = lines.map((l) => ({ ...l, cp: whiteToMove ? l.cp : -l.cp }));
+interface PositionAnalysis {
+  cp: number;
+  mate: number | null;
+  best: string;
+  bestSan: string;
+  alts: { uci: string; cp: number; san?: string }[];
+}
+
+interface Candidate {
+  uci: string;
+  cp: number | null;
+  mate: number | null;
+  san: string;
+  depth: number;
+}
+
+function whiteWinPercent(score: { cp: number; mate: number | null }): number {
+  return score.mate === null ? winPct(score.cp) : mateScoreValue(score.mate);
+}
+
+function winPercent(score: { cp: number; mate: number | null }, moverIsWhite: boolean): number {
+  const whitePercent = whiteWinPercent(score);
+  return moverIsWhite ? whitePercent : 100 - whitePercent;
+}
+
+function mateScore(mate: number): number {
+  return mate > 0 ? 100_000 - mate : -100_000 - mate;
+}
+
+async function analysePosition(fen: string): Promise<PositionAnalysis> {
+  const position = new Chess(fen);
+  const whiteToMove = position.turn() === 'w';
+  if (position.isGameOver()) {
+    const checkmate = position.isCheckmate();
+    return {
+      cp: checkmate ? (whiteToMove ? -100_000 : 100_000) : 0,
+      mate: checkmate ? (whiteToMove ? -1 : 1) : null,
+      best: '',
+      bestSan: '—',
+      alts: [],
+    };
+  }
+
+  const latestByMove = new Map<string, Candidate>();
+  await engine.analyse(fen, ANALYSE_MS, (cpStm, mateStm, pv, depth) => {
+    const uci = pv[0];
+    if (!uci) return;
+    const previous = latestByMove.get(uci);
+    if (previous && previous.depth > depth) return;
+    const move = { from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] };
+    const candidateGame = new Chess(fen);
+    let san = uci;
+    try { san = candidateGame.move(move).san; } catch { /* UCI fallback */ }
+    latestByMove.set(uci, { uci, cp: cpStm, mate: mateStm, san, depth });
+  }, 5);
+
+  const candidates = [...latestByMove.values()].map((candidate) => {
+    const scoreStm = candidate.cp ?? (candidate.mate === null ? 0 : mateScore(candidate.mate));
+    return { ...candidate, cp: whiteToMove ? scoreStm : -scoreStm };
+  }).sort((a, b) => whiteToMove ? b.cp - a.cp : a.cp - b.cp);
+  const best = candidates[0];
   return {
-    cp: whitePov[0]?.cp ?? 0,
-    best: whitePov[0]?.uci ?? '',
-    bestSan: whitePov[0]?.san ?? '?',
-    alts: whitePov.slice(0, 3),
+    cp: best?.cp ?? 0,
+    mate: best?.mate === null || best?.mate === undefined ? null : (whiteToMove ? best.mate : -best.mate),
+    best: best?.uci ?? '',
+    bestSan: best?.san ?? '—',
+    alts: candidates.slice(0, 3).map(({ uci, cp, san }) => ({ uci, cp, san })),
   };
 }
 
-function sanOfFen(fen: string, uci: string): string {
-  const g = new Chess(fen);
-  try {
-    return g.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] }).san;
-  } catch {
-    return uci;
-  }
+function pieceCount(fen: string): number {
+  return (fen.slice(0, fen.indexOf(' ')).match(/[a-z]/gi) ?? []).length;
 }
 
 export async function deepReview(
-  rec: GameRecord,
+  record: GameRecord,
   onProgress: (done: number, total: number, label: string) => void
 ): Promise<DeepReview> {
-  const moves = rec.movesUci.trim().split(/\s+/).filter(Boolean);
-  const game = new Chess(rec.startFen);
-  const fens: string[] = [game.fen()];
-  const pieceCounts: number[] = [];
-  const sanList: string[] = [];
-
-  const countPieces = (fen: string) => (fen.split(' ')[0].match(/[a-zA-Z]/g) ?? []).length;
+  const moves = record.movesUci.trim().split(/\s+/).filter(Boolean);
+  const game = new Chess(record.startFen);
+  const fens = [game.fen()];
+  const counts = [pieceCount(fens[0])];
+  const sanMoves: string[] = [];
+  const whiteToMoveAtStart = game.turn() === 'w';
 
   for (const uci of moves) {
-    pieceCounts.push(countPieces(game.fen()));
-    const mv = game.move({
-      from: uci.slice(0, 2),
-      to: uci.slice(2, 4),
-      promotion: uci.length > 4 ? uci[4] : undefined,
-    });
-    if (!mv) break;
-    sanList.push(mv.san);
-    fens.push(game.fen());
+    const move = game.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+    if (!move) break;
+    sanMoves.push(move.san);
+    const fen = game.fen();
+    fens.push(fen);
+    counts.push(pieceCount(fen));
+    if (game.isGameOver()) break;
   }
 
-  const n = sanList.length;
-  const plies: PlyReview[] = [];
+  moves.length = sanMoves.length;
+  const evaluations: PositionAnalysis[] = [];
   const evalGraph: { ply: number; cp: number }[] = [];
-
-  // Position evals: analyse every position once (0..n), then derive per-move data.
-  const posEvals: { cp: number; best: string; bestSan: string; alts: { uci: string; cp: number; san?: string }[] }[] = [];
-  const total = n + 1;
-  for (let i = 0; i <= n; i++) {
+  const total = fens.length;
+  for (let i = 0; i < total; i++) {
     onProgress(i, total, `Analysing position ${i + 1}/${total}…`);
-    const res = await analysePosition(fens[i]);
-    posEvals.push(res);
-    evalGraph.push({ ply: i, cp: res.cp });
-    onProgress(i + 1, total, `Analysed ${i + 1}/${total} positions`);
+    const result = await analysePosition(fens[i]);
+    evaluations.push(result);
+    evalGraph.push({ ply: i, cp: Math.max(-1000, Math.min(1000, result.cp)) });
+    onProgress(i + 1, total, `Analyzed ${i + 1}/${total} positions`);
   }
 
-  // Classify each played move.
-  for (let i = 0; i < n; i++) {
-    const moverIsWhite = i % 2 === 0;
-    const uci = moves[i];
-    const bestUci = posEvals[i].best;
-    const playedIsBest = uci === bestUci;
-    const evalBefore: MoveEval['before'] = { cp: posEvals[i].cp, mate: null };
-    const evalAfter: MoveEval['after'] = { cp: posEvals[i + 1].cp, mate: null };
-    const evalBest: MoveEval['best'] = { cp: posEvals[i].cp, mate: null };
-    const m: MoveEval = { before: evalBefore, after: evalAfter, best: evalBest };
-    // winDrop expects "best" as the best-available eval — same as before-eval here.
-    const drop = winDrop(m, moverIsWhite);
-    // Book: SAN prefix up to (not including) this move matches a known theory line.
-    const inBook = isBookLine(sanList.slice(0, i));
-    const book = inBook && drop < 40; // even book must not hang a queen
-    const cls: MoveCls = book ? 'book' : classify(drop, playedIsBest);
-
-    const beforePov = moverIsWhite ? winPct(posEvals[i].cp) : 100 - winPct(posEvals[i].cp);
-    const afterPov = moverIsWhite ? winPct(posEvals[i + 1].cp) : 100 - winPct(posEvals[i + 1].cp);
+  const plies: PlyReview[] = [];
+  for (let i = 0; i < moves.length; i++) {
+    const moverIsWhite = whiteToMoveAtStart !== (i % 2 === 1);
+    const before = evaluations[i];
+    const after = evaluations[i + 1];
+    const bestUci = before.best;
+    const moveEval: MoveEval = {
+      before: { cp: before.cp, mate: before.mate },
+      after: { cp: after.cp, mate: after.mate },
+      best: { cp: before.cp, mate: before.mate },
+    };
+    const drop = winDrop(moveEval, moverIsWhite);
+    const book = isBookLine(sanMoves.slice(0, i + 1)) && drop < 40;
+    const moverBefore = winPercent({ cp: before.cp, mate: before.mate }, moverIsWhite);
+    const moverAfter = winPercent({ cp: after.cp, mate: after.mate }, moverIsWhite);
 
     plies.push({
       ply: i + 1,
-      san: sanList[i],
-      uci,
+      san: sanMoves[i],
+      uci: moves[i],
       fenBefore: fens[i],
       moverIsWhite,
-      cls,
+      cls: book ? 'book' : classify(drop, moves[i] === bestUci),
       book,
       winDrop: drop,
-      moveAccuracy: book ? 100 : moveAccuracy(beforePov, afterPov),
-      evalBeforeCp: posEvals[i].cp,
-      evalAfterCp: posEvals[i + 1].cp,
+      moveAccuracy: book ? 100 : moveAccuracy(moverBefore, moverAfter),
+      evalBeforeCp: before.cp,
+      evalBeforeMate: before.mate,
+      evalAfterCp: after.cp,
+      evalAfterMate: after.mate,
       bestUci,
-      bestSan: posEvals[i].bestSan,
-      alternatives: posEvals[i].alts,
-      pieceCount: pieceCounts[i],
+      bestSan: before.bestSan,
+      alternatives: before.alts,
+      pieceCount: counts[i],
     });
   }
 
-  const white = summarize(plies.filter((p) => p.moverIsWhite));
-  const black = summarize(plies.filter((p) => !p.moverIsWhite));
-
-  // Critical moments: top swings by |eval change| — where the game turned.
+  const white = summarize(plies.filter((move) => move.moverIsWhite), plies);
+  const black = summarize(plies.filter((move) => !move.moverIsWhite), plies);
   const criticalMoments = [...plies]
-    .sort((a, b) => Math.abs(b.evalAfterCp - b.evalBeforeCp) - Math.abs(a.evalAfterCp - a.evalBeforeCp))
-    .filter((p) => Math.abs(p.evalAfterCp - p.evalBeforeCp) >= 150)
+    .sort((a, b) => {
+      const swingA = Math.abs(whiteWinPercent({ cp: a.evalAfterCp, mate: a.evalAfterMate }) -
+        whiteWinPercent({ cp: a.evalBeforeCp, mate: a.evalBeforeMate }));
+      const swingB = Math.abs(whiteWinPercent({ cp: b.evalAfterCp, mate: b.evalAfterMate }) -
+        whiteWinPercent({ cp: b.evalBeforeCp, mate: b.evalBeforeMate }));
+      return swingB - swingA;
+    })
+    .filter((move) => Math.abs(whiteWinPercent({ cp: move.evalAfterCp, mate: move.evalAfterMate }) -
+      whiteWinPercent({ cp: move.evalBeforeCp, mate: move.evalBeforeMate })) >= 8)
     .slice(0, 6)
     .sort((a, b) => a.ply - b.ply);
 
@@ -180,32 +219,49 @@ export async function deepReview(
     black,
     evalGraph,
     criticalMoments,
-    openingLabel: detectOpening(sanList.slice(0, 8)),
+    openingLabel: detectOpening(sanMoves.slice(0, 8)),
   };
 }
 
-function summarize(moves: PlyReview[]): PlayerReview {
+function summarize(moves: PlyReview[], gamePlies: PlyReview[]): PlayerReview {
   const counts: Record<MoveCls, number> = { book: 0, best: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 };
-  for (const m of moves) counts[m.cls]++;
-  // Book moves are theory, not skill — exclude them from the accuracy calc.
-  const scored = moves.filter((m) => !m.book);
-  const pairs = scored.map((m) => ({
-    before: m.moverIsWhite ? winPct(m.evalBeforeCp) : 100 - winPct(m.evalBeforeCp),
-    after: m.moverIsWhite ? winPct(m.evalAfterCp) : 100 - winPct(m.evalAfterCp),
+  for (const move of moves) counts[move.cls]++;
+  const scored = moves.filter((move) => !move.book);
+  const moveIndices = scored.map((move) => gamePlies.indexOf(move));
+  const accuracyPairs = scored.map((move) => ({
+    before: winPercent({ cp: move.evalBeforeCp, mate: move.evalBeforeMate }, move.moverIsWhite),
+    after: winPercent({ cp: move.evalAfterCp, mate: move.evalAfterMate }, move.moverIsWhite),
   }));
-  const accuracy = scored.length ? aggregateAccuracy(pairs) : 100;
-  const avgWinDrop = moves.length ? moves.reduce((s, m) => s + m.winDrop, 0) / moves.length : 0;
-  const worst = moves.length
-    ? moves.reduce((w, m) => (m.winDrop > w.winDrop ? m : w), moves[0])
-    : null;
-  const spans = phaseSpans(moves.map((m) => m.pieceCount));
-  const phases = spans.map((s) => {
-    const seg = moves.slice(s.fromPly, s.toPly);
-    const segPairs = seg.map((m) => ({
-      before: m.moverIsWhite ? winPct(m.evalBeforeCp) : 100 - winPct(m.evalBeforeCp),
-      after: m.moverIsWhite ? winPct(m.evalAfterCp) : 100 - winPct(m.evalAfterCp),
+  const winPercentSeries = [
+    gamePlies.length ? whiteWinPercent({ cp: gamePlies[0].evalBeforeCp, mate: gamePlies[0].evalBeforeMate }) : 50,
+    ...gamePlies.map((move) => whiteWinPercent({ cp: move.evalAfterCp, mate: move.evalAfterMate })),
+  ];
+  const accuracy = scored.length
+    ? aggregateAccuracy(accuracyPairs, winPercentSeries, moveIndices)
+    : 100;
+  const avgWinDrop = moves.length ? moves.reduce((sum, move) => sum + move.winDrop, 0) / moves.length : 0;
+  const worst = moves.reduce<PlyReview | null>(
+    (current, move) => !current || move.winDrop > current.winDrop ? move : current,
+    null
+  );
+  const allWinPercents = [
+    gamePlies.length ? whiteWinPercent({ cp: gamePlies[0].evalBeforeCp, mate: gamePlies[0].evalBeforeMate }) : 50,
+    ...gamePlies.map((move) => whiteWinPercent({ cp: move.evalAfterCp, mate: move.evalAfterMate })),
+  ];
+  const phases = phaseSpans(gamePlies.map((move) => move.pieceCount)).map((span) => {
+    const segment = moves.filter((move) => move.ply - 1 >= span.fromPly && move.ply - 1 < span.toPly);
+    const scoredSegment = segment.filter((move) => !move.book);
+    const pairs = scoredSegment.map((move) => ({
+      before: winPercent({ cp: move.evalBeforeCp, mate: move.evalBeforeMate }, move.moverIsWhite),
+      after: winPercent({ cp: move.evalAfterCp, mate: move.evalAfterMate }, move.moverIsWhite),
     }));
-    return { name: s.name, accuracy: Math.round(aggregateAccuracy(segPairs)), moves: seg.length };
+    const phaseWinPercents = allWinPercents.slice(span.fromPly, span.toPly + 1);
+    const moveIndices = scoredSegment.map((move) => move.ply - 1 - span.fromPly);
+    return {
+      name: span.name,
+      accuracy: Math.round(aggregateAccuracy(pairs, phaseWinPercents, moveIndices)),
+      moves: segment.length,
+    };
   });
   return { accuracy, counts, avgWinDrop, worst, phases };
 }
@@ -229,8 +285,8 @@ export function detectOpening(sanPrefix: string[]): string {
     [/^e4 Nf6/, 'Alekhine Defence'],
     [/^e4 d6/, 'Pirc Defence'],
     [/^e4 g6/, 'Modern Defence'],
+    [/^d4 d5 c4 e6/, 'Queen\'s Gambit Declined'],
     [/^d4 d5 c4/, 'Queen\'s Gambit'],
-    [/^d4 d5 c4 e6/, 'QGD'],
     [/^d4 Nf6 c4 g6/, 'King\'s Indian Defence'],
     [/^d4 Nf6 c4 e6/, 'Nimzo/Indian complex'],
     [/^d4 f5/, 'Dutch Defence'],
@@ -240,10 +296,5 @@ export function detectOpening(sanPrefix: string[]): string {
     [/^e4/, 'King\'s Pawn'],
     [/^d4/, 'Queen\'s Pawn'],
   ];
-  for (const [re, name] of table) {
-    if (re.test(line)) return name;
-  }
-  return 'Irregular';
+  return table.find(([pattern]) => pattern.test(line))?.[1] ?? 'Irregular';
 }
-
-export { CLS_ORDER };

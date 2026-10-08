@@ -1,15 +1,4 @@
-/**
- * Engine message protocol shared by the UI and worker code.
- * (Worker is created from a Blob so no separate worker entry is needed.)
- */
-
-export type EngineRequest =
-  | { type: 'init'; tier: 'lite' | 'full' }
-  | { type: 'newgame' }
-  | { type: 'play'; fen: string; strength: EngineStrengthParams }
-  | { type: 'analyse'; fen: string; moveTime: number }
-  | { type: 'stop' }
-  | { type: 'quit' };
+/** Types shared with the engine worker adapter. */
 
 export interface EngineStrengthParams {
   skill: number;
@@ -19,14 +8,15 @@ export interface EngineStrengthParams {
   blunderChance?: number;
   /** Centipawn window for randomizing among near-best lines. */
   randomCp?: number;
+  /** Max centipawn loss vs best for a candidate to enter the blunder pool (default 320). */
+  blunderWindowCp?: number;
+  /** Min centipawn score allowed for a blunder pick (default -400). */
+  blunderFloorCp?: number;
+  /** Root lines the engine evaluates (default 5 when randomizing, else 1). */
+  multipv?: number;
+  /** Hard search depth cap; when set the engine plays `go depth N` instead of on move time. */
+  depth?: number | null;
 }
-
-export type EngineResponse =
-  | { type: 'status'; message: string }
-  | { type: 'ready'; tier: string }
-  | { type: 'bestmove'; from: string; to: string; promotion?: string; raw: string }
-  | { type: 'eval'; cp: number | null; mate: number | null; pv: string[] }
-  | { type: 'error'; message: string };
 
 export interface ChessJsMove {
   from: string;

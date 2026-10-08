@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rate, growRd } from '../src/glicko2';
+import { rate, ratePeriod, growRd } from '../src/glicko2';
 
 describe('glicko2', () => {
   // Glickman's "Example of the Glicko-2 system" worked example:
@@ -41,10 +41,13 @@ describe('glicko2', () => {
   });
 
   it('shrinks RD as evidence accumulates', () => {
-    let s = { rating: 1500, rd: 350, volatility: 0.06, lastPlayed: 0 };
-    for (let i = 0; i < 10; i++) {
-      s = rate(s, [{ oppRating: 1500, oppRd: 150, score: i % 3 === 0 ? 1 : 0 }], i * 86_400_000);
-    }
+    // Ten games in one rating period: RD shrinks without inactivity growth.
+    const matches = Array.from({ length: 10 }, (_, i) => ({
+      oppRating: 1500,
+      oppRd: 150,
+      score: i % 3 === 0 ? 1 : 0,
+    }));
+    const s = ratePeriod({ rating: 1500, rd: 350, volatility: 0.06, lastPlayed: 0 }, matches, 0);
     expect(s.rd).toBeLessThan(120);
   });
 

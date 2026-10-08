@@ -1,64 +1,78 @@
-/* Gambit service worker: offline-first for the train.
- * All URLs are relative and the cache is versioned by a build hash injected
- * at build time (the workflow replaces __BASE__ with the deploy base path),
- * so this works identically at "/" (Netlify) and "/repo/" (GitHub Pages).
- */
-const BASE = new URL(self.registration.scope).pathname; // deploy base, e.g. "/" or "/gambit/"
-const CACHE = 'gambit-' + (self.registration.scope.match(/[\w-]+\/?$/) || ['v1'])[0].replace('/', '');
-const SHELL = [BASE, BASE + 'index.html', BASE + 'manifest.webmanifest', BASE + 'icons/icon.svg'];
+/* Gambit service worker: offline shell + asset caching. */
+const BASE = new URL(self.registration.scope).pathname;
+const CACHE_VERSION = 'v4';
+const SCOPE_ID = BASE.replace(/^\/+|\/+$/g, '').replace(/[^\w-]/g, '_') || 'root';
+const CACHE_PREFIX = `gambit-${SCOPE_ID}-`;
+const CACHE = CACHE_PREFIX + CACHE_VERSION;
+const LEGACY_CACHE = `gambit-${(self.registration.scope.match(/[\w-]+\/?$/) || ['v1'])[0].replace('/', '')}`;
+const SHELL = [BASE, `${BASE}index.html`, `${BASE}manifest.webmanifest`, `${BASE}icons/icon.svg`];
 
-self.addEventListener('install', (e) => {
-  e.waitUntil(
+/* Everything the app needs offline, fetched at install so the first session
+ * on a fresh device already works with no signal: puzzle bundle, all piece
+ * sets, and the lite engine. The 40MB full NNUE engine stays opt-in via the
+ * in-app download. Precache failures are tolerated (allSettled): a blocked
+ * asset falls back to the cache-first fetch path once it is requested. */
+const PIECE_TYPES = ['K', 'Q', 'R', 'B', 'N', 'P'];
+const PRECACHE = [
+  `${BASE}data/puzzles.json`,
+  `${BASE}engine/stockfish.js`,
+  `${BASE}engine/stockfish.wasm`,
+  ...['cburnett', 'staunty', 'merida'].flatMap((set) =>
+    ['w', 'b'].flatMap((color) => PIECE_TYPES.map((type) => `${BASE}pieces/${set}/${color}${type}.svg`))),
+];
+const CACHE_FIRST_PREFIXES = ['engine/', 'data/', 'icons/', 'pieces/']
+  .map((path) => new URL(path, self.registration.scope).pathname);
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
     caches.open(CACHE)
-      .then((c) => Promise.allSettled(SHELL.map((u) => c.add(u))))
+      .then((cache) => Promise.allSettled([...SHELL, ...PRECACHE].map((url) => cache.add(url))))
       .then(() => self.skipWaiting())
   );
 });
 
-self.addEventListener('activate', (e) => {
-  e.waitUntil(
-    caches
-      .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys()
+      .then((keys) => Promise.all(
+        keys.filter((key) => key === LEGACY_CACHE || (key.startsWith(CACHE_PREFIX) && key !== CACHE))
+          .map((key) => caches.delete(key))
+      ))
       .then(() => self.clients.claim())
   );
 });
 
-const CACHE_FIRST = [
-  /^\/engine\//, /^\/data\//, /^\/icons\//, /^\/pieces\//,
-].map((re) => new RegExp('^' + BASE.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&').slice(0, -1) + re.source));
+function cacheResponse(event, response) {
+  if (!response.ok || response.type === 'opaque') return;
+  const copy = response.clone();
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.put(event.request, copy)).catch(() => {}));
+}
 
-self.addEventListener('fetch', (e) => {
-  const url = new URL(e.request.url);
-  if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
+self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+  if (event.request.method !== 'GET' || url.origin !== self.location.origin) return;
 
-  if (CACHE_FIRST.some((re) => re.test(url.pathname))) {
-    e.respondWith(
-      caches.match(e.request).then(
-        (hit) =>
-          hit ||
-          fetch(e.request).then((res) => {
-            if (res.ok) {
-              const copy = res.clone();
-              caches.open(CACHE).then((c) => c.put(e.request, copy));
-            }
-            return res;
-          })
-      )
-    );
+  if (CACHE_FIRST_PREFIXES.some((prefix) => url.pathname.startsWith(prefix))) {
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE);
+      const hit = await cache.match(event.request);
+      if (hit) return hit;
+      const response = await fetch(event.request);
+      cacheResponse(event, response);
+      return response;
+    })());
     return;
   }
 
-  // Navigation + hashed Vite assets: network first, cache fallback.
-  e.respondWith(
-    fetch(e.request)
-      .then((res) => {
-        if (res.ok) {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(e.request, copy));
-        }
-        return res;
-      })
-      .catch(() => caches.match(e.request).then((hit) => hit || caches.match(BASE + 'index.html')))
-  );
+  // Navigations and built app assets are network-first, with the installed shell offline fallback.
+  event.respondWith((async () => {
+    try {
+      const response = await fetch(event.request);
+      cacheResponse(event, response);
+      return response;
+    } catch {
+      const cache = await caches.open(CACHE);
+      return (await cache.match(event.request)) ?? (await cache.match(`${BASE}index.html`));
+    }
+  })());
 });

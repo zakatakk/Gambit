@@ -1,98 +1,161 @@
 /** App shell: bottom-tab navigation and screen mounting. */
-import { applyTheme, watchSystemTheme } from './theme';
+import { applyAccent, applySkin, applyTheme, watchSystemTheme } from './theme';
 import { setSoundsEnabled, primeAudio } from './sounds';
 import { getSettings, getProfile } from './db';
+import { applyBoardTheme, applyPieceSet } from './pieces';
 import { el, toast } from './ui';
 import { mountHome } from './screens/home';
 import { mountPlay } from './screens/play';
 import { mountPuzzles } from './screens/puzzles';
 import { mountStats } from './screens/stats';
 import { mountSettings } from './screens/settings';
+import { mountAnalysis } from './screens/analysis';
+
+export type AppTab = 'home' | 'play' | 'puzzles' | 'analysis' | 'stats' | 'settings';
 
 export interface App {
-  navigate(tab: 'home' | 'play' | 'puzzles' | 'stats' | 'settings', params?: Record<string, unknown>): void;
+  navigate(tab: AppTab, params?: Record<string, unknown>): void;
   refreshRating(): Promise<void>;
 }
 
 const appEl = document.getElementById('app')!;
 let current: HTMLElement | null = null;
-let activeTab = 'home';
+let activeTab: AppTab = 'home';
+let renderVersion = 0;
 
 const TABS = [
-  { id: 'home', label: 'Home', ico: '⌂' },
-  { id: 'play', label: 'Play', ico: '♞' },
-  { id: 'puzzles', label: 'Puzzles', ico: '★' },
-  { id: 'stats', label: 'Stats', ico: '▲' },
-  { id: 'settings', label: 'Settings', ico: '' },
+  { id: 'home', label: 'Home' },
+  { id: 'play', label: 'Play' },
+  { id: 'puzzles', label: 'Puzzles' },
+  { id: 'analysis', label: 'Analysis' },
+  { id: 'stats', label: 'Stats' },
+  { id: 'settings', label: 'Settings' },
 ] as const;
 
-async function render(app: App): Promise<void> {
-  if (current) current.remove();
-  // Close any lingering bottom sheets from the previous screen.
+async function render(app: App, params?: Record<string, unknown>): Promise<void> {
+  const version = ++renderVersion;
+  const tabToRender = activeTab;
+  if (current) {
+    current.dispatchEvent(new Event('screen-dispose'));
+    current.remove();
+  }
   document.querySelectorAll('.modal-back').forEach((m) => m.remove());
+
   const mount = el('div');
   appEl.appendChild(mount);
   current = mount;
-  switch (activeTab) {
-    case 'home': await mountHome(mount, app); break;
-    case 'play': await mountPlay(mount, app, {}); break;
-    case 'puzzles': await mountPuzzles(mount, app); break;
-    case 'stats': await mountStats(mount, app); break;
-    case 'settings': await mountSettings(mount, app); break;
+  // Per-screen density hook: lets CSS compact each screen so it fits one viewport.
+  document.body.dataset.screen = tabToRender;
+
+  try {
+    switch (tabToRender) {
+      case 'home': await mountHome(mount, app); break;
+      case 'play': await mountPlay(mount, app, params ?? {}); break;
+      case 'puzzles': await mountPuzzles(mount, app); break;
+      case 'analysis': await mountAnalysis(mount, app); break;
+      case 'stats': await mountStats(mount, app); break;
+      case 'settings': await mountSettings(mount, app); break;
+    }
+  } catch (error) {
+    if (renderVersion !== version || current !== mount) return;
+    const message = error instanceof Error ? error.message : String(error);
+    mount.append(el('div', { class: 'section' },
+      el('h2', {}, 'This screen could not be loaded'),
+      el('p', { class: 'muted' }, message),
+      el('button', { class: 'primary', onclick: () => void render(app, params) }, 'Try again')));
   }
-  for (const b of document.querySelectorAll('nav.tabs button')) {
-    b.classList.toggle('active', (b as HTMLElement).dataset.tab === activeTab);
+
+  if (renderVersion !== version || current !== mount || activeTab !== tabToRender) return;
+  for (const button of document.querySelectorAll('nav.sidebar button')) {
+    button.classList.toggle('active', (button as HTMLElement).dataset.tab === tabToRender);
   }
 }
 
 export function bootApp(): void {
-  // Tabs
-  const nav = el('nav', { class: 'tabs' });
-  for (const t of TABS) {
-    const b = el(
+  // Sidebar navigation: hidden by default, opened from the edge handle.
+  const scrim = el('div', { class: 'sidebar-scrim', onclick: () => setSidebar(false) });
+  const sidebar = el('nav', { class: 'sidebar', 'aria-label': 'Sections' });
+  for (const tab of TABS) {
+    const button = el(
       'button',
-      { 'data-tab': t.id, onclick: () => { primeAudio(); app.navigate(t.id); } },
-      t.ico ? el('span', { class: 'ico' }, t.ico) : null,
-      el('span', {}, t.label)
+      { 'data-tab': tab.id, onclick: () => { primeAudio(); app.navigate(tab.id); } },
+      tab.label
     );
-    nav.appendChild(b);
+    sidebar.appendChild(button);
   }
-  document.body.appendChild(nav);
+  const handle = el('button', {
+    class: 'menu-handle',
+    'aria-label': 'Open menu',
+    'aria-expanded': 'false',
+    onclick: () => setSidebar(document.body.classList.toggle('sidebar-open')),
+  }, menuIcon());
+  document.body.append(handle, sidebar, scrim);
+
+  function setSidebar(open: boolean): void {
+    document.body.classList.toggle('sidebar-open', open);
+    handle.setAttribute('aria-expanded', String(open));
+  }
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') setSidebar(false);
+  });
 
   const app: App = {
     navigate(tab, params) {
       activeTab = tab;
-      if (tab === 'play') {
-        if (current) current.remove();
-        current = el('div');
-        appEl.appendChild(current);
-        void mountPlay(current, app, params ?? {});
-        for (const b of document.querySelectorAll('nav.tabs button')) {
-          b.classList.toggle('active', (b as HTMLElement).dataset.tab === 'play');
-        }
-        return;
-      }
-      void render(app);
+      document.body.classList.remove('sidebar-open');
+      handle.setAttribute('aria-expanded', 'false');
+      void render(app, params);
     },
-    async refreshRating() {
-      void render(app);
+    refreshRating() {
+      return render(app);
     },
   };
 
+  // Render immediately; loading settings or the full engine must not block UI.
+  void render(app);
+
   void (async () => {
-    const s = await getSettings();
-    applyTheme(s.theme);
-    setSoundsEnabled(s.sounds);
-    watchSystemTheme(() => {
-      void getSettings().then((st) => applyTheme(st.theme));
-    });
-    // First-run nudge
-    const p = await getProfile();
-    if (!p.assessed) {
-      setTimeout(() => toast('New here? Run the rating assessment from Home.'), 900);
+    try {
+      const settings = await getSettings();
+      applyTheme(settings.theme);
+      applySkin(settings.skin);
+      applyAccent(settings.accent);
+      applyPieceSet(settings.pieceSet);
+      applyBoardTheme(settings.boardTheme);
+      setSoundsEnabled(settings.sounds);
+      watchSystemTheme(() => {
+        void getSettings().then((latest) => applyTheme(latest.theme));
+      });
+
+      const profile = await getProfile();
+      if (!profile.assessed) {
+        setTimeout(() => toast('New here? Run the rating assessment from Home.'), 900);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast(`Startup warning: ${message}`);
     }
-    await render(app);
   })();
+}
+
+/** Hamburger icon for the sidebar handle (drawn inline: no glyph fonts). */
+function menuIcon(): SVGSVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  for (const y of [6, 12, 18]) {
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', '3');
+    line.setAttribute('y1', String(y));
+    line.setAttribute('x2', '21');
+    line.setAttribute('y2', String(y));
+    line.setAttribute('stroke', 'currentColor');
+    line.setAttribute('stroke-width', '2');
+    line.setAttribute('stroke-linecap', 'round');
+    svg.appendChild(line);
+  }
+  return svg;
 }
 
 export { el };

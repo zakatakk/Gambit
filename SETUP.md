@@ -1,6 +1,6 @@
 # Gambit — iPhone Setup Guide
 
-Get Gambit on your phone, working offline, with music playing. ~15 minutes, no new accounts needed.
+Gambit on your iPhone in about 15 minutes — hosted, installed, offline, and rated. No new accounts needed.
 
 ---
 
@@ -46,25 +46,24 @@ Any `git push` to `main` redeploys automatically. Rating/games/reviews on your p
 
 ## Part 2 — Install on your iPhone
 
-1. On your iPhone, open **Safari** (must be Safari — other browsers can't install home-screen apps on iOS).
+1. On your iPhone, open **Safari** (iOS installs home-screen apps from Safari only).
 2. Go to `https://YOURUSERNAME.github.io/gambit/`.
-3. Wait for the app to load (first load pulls the lite engine, ~2MB).
 4. Tap the **Share** button (square with arrow).
 5. Scroll → **Add to Home Screen** → **Add**.
 6. Launch **Gambit** from the home screen — fullscreen, no browser chrome.
 
 ---
 
-## Part 3 — Make it work offline (the train)
+## Part 3 — Make it work offline
 
 One-time, at home on Wi-Fi:
 
 1. Open Gambit from the home-screen icon.
-2. **Play tab → New game vs CPU → make one move** (this caches the chess engine).
+2. **Play tab → New game vs CPU → make one move** (this caches the engine).
 3. **Puzzles tab** → let one puzzle load (this caches the puzzle set).
 4. Done — everything is on the phone now.
 
-**Verify before you travel:** Airplane Mode ON → open Gambit → play moves, solve a puzzle. If that works, the train works.
+**Verify before you travel:** Airplane Mode ON → open Gambit → play a few moves and solve a puzzle. If it works there, it works on the train.
 
 Notes:
 
@@ -75,7 +74,7 @@ Notes:
 
 ## Part 4 — Spotify while you play
 
-Just play music. Gambit's sounds are short effects that **mix with** Spotify, not replace it.
+Gambit's sounds are short effects; they mix with Spotify, they don't replace it.
 
 - Spotify → play → switch to Gambit → music keeps going.
 - Want total silence from the app? **Settings → Sounds → off.**
@@ -90,7 +89,7 @@ Just play music. Gambit's sounds are short effects that **mix with** Spotify, no
 | Play a rated game | Play → **New game vs CPU** (strength = your rating) |
 | Solve puzzles | Puzzles tab — one wrong move fails, Lichess-style |
 | Review a game | After a game → **Review game** → tap the eval graph to jump around |
-| Old reviews | Stats → **Learn** → tap any analysed game |
+| Old reviews | Stats → **Learn** → tap any analyzed game |
 | Difficulty override | Settings → **Difficulty** slider |
 | Strict mode | Settings → toggle (no hints/takebacks) |
 | Backup | Settings → Data → **Export data** |

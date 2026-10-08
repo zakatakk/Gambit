@@ -1,62 +1,70 @@
-/** Theme handling: system | light | dark. Applies data-theme attr on <html>. */
+/** Appearance: style skins (light + dark each), theme preference, accent tint. */
 
-export type ThemePref = 'system' | 'light' | 'dark';
+import type { AccentPref, Skin } from './types';
+
+type ThemePref = 'system' | 'light' | 'dark';
+
+export interface SkinOption {
+  id: Skin;
+  label: string;
+  /** Status-bar tint per mode for the iOS theme-color meta. */
+  chrome: { light: string; dark: string };
+}
+
+/** Every skin ships both modes; Classic is the original editorial look. */
+export const SKINS: readonly SkinOption[] = [
+  { id: 'classic', label: 'Classic', chrome: { light: '#f4efe6', dark: '#191611' } },
+  { id: 'midnight', label: 'Midnight Study', chrome: { light: '#f2ede2', dark: '#14161a' } },
+  { id: 'bauhaus', label: 'Bauhaus', chrome: { light: '#f5f2ec', dark: '#16181d' } },
+  { id: 'lakehouse', label: 'Lakehouse', chrome: { light: '#eef2ef', dark: '#1a201d' } },
+  { id: 'cyber', label: 'Cyber Gambit', chrome: { light: '#0d120e', dark: '#0b0f0c' } },
+];
+
+export const ACCENTS: readonly { id: AccentPref; label: string }[] = [
+  { id: 'oxblood', label: 'Oxblood' },
+  { id: 'forest', label: 'Forest' },
+  { id: 'royal', label: 'Royal' },
+  { id: 'aubergine', label: 'Aubergine' },
+];
+
+export function normalizeSkin(value: unknown): Skin {
+  return SKINS.some((skin) => skin.id === value) ? (value as Skin) : 'classic';
+}
+
+export function normalizeAccent(value: unknown): AccentPref {
+  return ACCENTS.some((accent) => accent.id === value) ? (value as AccentPref) : 'oxblood';
+}
 
 const mq = window.matchMedia('(prefers-color-scheme: dark)');
+
+function setChrome(mode: 'light' | 'dark'): void {
+  const skin = SKINS.find((s) => s.id === (document.documentElement.dataset.skin ?? 'classic')) ?? SKINS[0];
+  let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (!meta) {
+    meta = document.createElement('meta');
+    meta.name = 'theme-color';
+    document.head.appendChild(meta);
+  }
+  meta.content = skin.chrome[mode];
+}
 
 export function applyTheme(pref: ThemePref): void {
   const dark = pref === 'dark' || (pref === 'system' && mq.matches);
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  setChrome(dark ? 'dark' : 'light');
+}
+
+export function applySkin(skin: Skin): void {
+  document.documentElement.dataset.skin = normalizeSkin(skin);
+  // Re-resolve chrome: the skin decides the status-bar tint for both modes.
+  const dark = document.documentElement.dataset.theme === 'dark';
+  setChrome(dark ? 'dark' : 'light');
+}
+
+export function applyAccent(accent: AccentPref): void {
+  document.documentElement.dataset.accent = normalizeAccent(accent);
 }
 
 export function watchSystemTheme(onChange: () => void): void {
   mq.addEventListener('change', onChange);
-}
-
-const LIGHT = {
-  bg: '#f5f2ec',
-  surface: '#ffffff',
-  text: '#1d1b16',
-  sub: '#6b675e',
-  accent: '#7a5c2e',
-  border: '#e2ddd2',
-  boardLight: '#edd6b0',
-  boardDark: '#b58863',
-  lastMove: 'rgba(255, 213, 79, 0.45)',
-  sel: 'rgba(255, 213, 79, 0.6)',
-  danger: '#b3261e',
-  success: '#2e6b34',
-};
-
-const DARK = {
-  bg: '#12110f',
-  surface: '#1d1b17',
-  text: '#e9e4da',
-  sub: '#9a948a',
-  accent: '#d3a95c',
-  border: '#2a2722',
-  boardLight: '#8f7858',
-  boardDark: '#4d4335',
-  lastMove: 'rgba(255, 202, 40, 0.22)',
-  sel: 'rgba(255, 202, 40, 0.35)',
-  danger: '#e57373',
-  success: '#81c995',
-};
-
-export function cssVars(dark: boolean): Record<string, string> {
-  const c = dark ? DARK : LIGHT;
-  return {
-    '--bg': c.bg,
-    '--surface': c.surface,
-    '--text': c.text,
-    '--sub': c.sub,
-    '--accent': c.accent,
-    '--border': c.border,
-    '--board-light': c.boardLight,
-    '--board-dark': c.boardDark,
-    '--last-move': c.lastMove,
-    '--sel': c.sel,
-    '--danger': c.danger,
-    '--success': c.success,
-  };
 }

@@ -15,6 +15,13 @@ describe('puzzleScoring', () => {
     expect(puzzleScoreForMistakes(3)).toBe(0);
   });
 
+  it('permits moving on as soon as a puzzle is successfully solved', () => {
+    expect(puzzleScoreForMistakes(0)).toBeGreaterThan(0);
+    expect(puzzleScoreForMistakes(1)).toBeGreaterThan(0);
+    expect(puzzleScoreForMistakes(2)).toBeGreaterThan(0);
+    expect(puzzleScoreForMistakes(PUZZLE_TRY_LIMIT)).toBe(0);
+  });
+
   it('rejects negative or fractional mistake counts', () => {
     expect(() => puzzleScoreForMistakes(-1)).toThrow(RangeError);
     expect(() => puzzleScoreForMistakes(1.5)).toThrow(RangeError);
