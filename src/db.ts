@@ -1,7 +1,7 @@
 /**
  * IndexedDB persistence: profile, settings, games, rating history, puzzle attempts.
  */
-import type { GameRecord, Profile, RatingHistoryPoint, Settings } from './types';
+import type { GameRecord, Profile, PuzzleAttempt, RatingHistoryPoint, Settings } from './types';
 import { DEFAULT_SETTINGS } from './types';
 
 const DB_NAME = 'gambit';
@@ -92,11 +92,11 @@ export async function getHistory(limit = 100): Promise<RatingHistoryPoint[]> {
   return all.sort((a, b) => a.ts - b.ts).slice(-limit);
 }
 
-export async function addAttempt(a: { id: string; won: boolean; rating: number; ts: number }): Promise<void> {
+export async function addAttempt(a: PuzzleAttempt): Promise<void> {
   await tx('attempts', 'readwrite', (s) => s.put(a) as unknown as IDBRequest<unknown>);
 }
 
-export async function getAttempts(): Promise<{ id: string; won: boolean; rating: number; ts: number }[]> {
+export async function getAttempts(): Promise<PuzzleAttempt[]> {
   return tx('attempts', 'readonly', (s) => s.getAll());
 }
 
@@ -161,7 +161,7 @@ export async function importData(json: string): Promise<void> {
     settings?: Settings;
     games?: GameRecord[];
     history?: RatingHistoryPoint[];
-    attempts?: { id: string; won: boolean; rating: number; ts: number }[];
+    attempts?: PuzzleAttempt[];
     reviews?: SavedReview[];
   };
   if (d.profile) await saveProfile(d.profile);

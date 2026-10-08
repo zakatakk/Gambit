@@ -116,11 +116,13 @@ export async function deepReview(
 
   // Position evals: analyse every position once (0..n), then derive per-move data.
   const posEvals: { cp: number; best: string; bestSan: string; alts: { uci: string; cp: number; san?: string }[] }[] = [];
+  const total = n + 1;
   for (let i = 0; i <= n; i++) {
-    onProgress(i, n + 1, `Analysing position ${i}/${n}`);
+    onProgress(i, total, `Analysing position ${i + 1}/${total}…`);
     const res = await analysePosition(fens[i]);
     posEvals.push(res);
     evalGraph.push({ ply: i, cp: res.cp });
+    onProgress(i + 1, total, `Analysed ${i + 1}/${total} positions`);
   }
 
   // Classify each played move.

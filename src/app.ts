@@ -23,7 +23,7 @@ const TABS = [
   { id: 'play', label: 'Play', ico: '♞' },
   { id: 'puzzles', label: 'Puzzles', ico: '★' },
   { id: 'stats', label: 'Stats', ico: '▲' },
-  { id: 'settings', label: 'Settings', ico: '⚙' },
+  { id: 'settings', label: 'Settings', ico: '' },
 ] as const;
 
 async function render(app: App): Promise<void> {
@@ -52,7 +52,7 @@ export function bootApp(): void {
     const b = el(
       'button',
       { 'data-tab': t.id, onclick: () => { primeAudio(); app.navigate(t.id); } },
-      el('span', { class: 'ico' }, t.ico),
+      t.ico ? el('span', { class: 'ico' }, t.ico) : null,
       el('span', {}, t.label)
     );
     nav.appendChild(b);

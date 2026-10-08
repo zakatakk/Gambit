@@ -19,8 +19,8 @@ export interface RatingState {
 export interface Match {
   oppRating: number;
   oppRd: number;
-  /** 1 win, 0 loss, 0.5 draw */
-  score: 0 | 0.5 | 1;
+  /** Score between 0 (loss) and 1 (win); puzzle attempts can earn partial credit. */
+  score: number;
 }
 
 function g(rd: number): number {

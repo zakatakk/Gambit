@@ -24,7 +24,12 @@
   --sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif;
   --mono: ui-monospace, 'SF Mono', Menlo, monospace;
 
+  --page-gutter: clamp(16px, 4.5vw, 24px);
+  --content-max: 540px;
   --board-size: min(92vw, 470px);
+  --safe-top: max(16px, env(safe-area-inset-top, 0px));
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --nav-height: calc(54px + var(--safe-bottom));
 }
 html[data-theme='dark'] {
   --paper: #191611;
@@ -45,7 +50,8 @@ html[data-theme='dark'] {
 }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+html, body { min-height: 100%; }
+html { background: var(--paper); }
 body {
   margin: 0;
   background: var(--paper);
@@ -56,7 +62,37 @@ body {
   -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
 }
-#app { max-width: 540px; margin: 0 auto; padding: 0 0 calc(58px + env(safe-area-inset-bottom)); min-height: 100%; }
+#app {
+  width: min(100%, var(--content-max));
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0 auto;
+  padding: var(--safe-top) 0 calc(var(--nav-height) + 8px);
+  overflow-x: clip;
+}
+
+/* Every screen uses the same centered content column and horizontal gutter. */
+.section,
+.game-top,
+.status-bar,
+.puzzle-meta,
+.feedback,
+.stats-summary,
+.screen-content {
+  width: auto;
+  max-width: calc(100% - var(--page-gutter) * 2);
+  margin-left: auto;
+  margin-right: auto;
+}
+.hero {
+  width: 100%;
+  max-width: var(--content-max);
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: var(--page-gutter);
+  padding-right: var(--page-gutter);
+}
+.section { padding-left: 0; padding-right: 0; }
 
 /* ---------- type ---------- */
 h1, h2, h3 {
@@ -86,7 +122,13 @@ a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset:
 }
 
 /* ---------- structure: rules, not cards ---------- */
-.section { margin: 0 18px; padding: 14px 0 18px; border-bottom: 1px solid var(--rule); }
+.section {
+  width: calc(100% - var(--page-gutter) * 2);
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: 14px 0 18px;
+  border-bottom: 1px solid var(--rule);
+}
 .section:last-of-type { border-bottom: none; }
 .section > h2 { margin-bottom: 8px; }
 .muted { color: var(--ink-2); font-size: 0.88rem; }
@@ -146,26 +188,33 @@ select, input[type='number'] {
 /* ---------- nav: plain text tabs, underlined active ---------- */
 nav.tabs {
   position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
-  display: flex; justify-content: center; gap: 2px;
+  display: flex; justify-content: center; gap: 0;
+  width: min(100%, var(--content-max));
+  margin: 0 auto;
   background: var(--paper);
   border-top: 1px solid var(--rule-2);
-  padding: 4px 6px calc(4px + env(safe-area-inset-bottom));
+  padding: 4px var(--page-gutter) calc(4px + var(--safe-bottom));
 }
 nav.tabs button {
-  flex: 1; max-width: 120px;
+  flex: 1 1 0; min-width: 0; max-width: none;
   border: none; background: none; color: var(--ink-3);
-  padding: 8px 2px 6px; font-size: 0.72rem; font-weight: 600;
-  letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 8px 1px 6px; font-size: clamp(0.52rem, 2.5vw, 0.72rem); font-weight: 600;
+  letter-spacing: clamp(0.01em, 0.15vw, 0.06em); text-transform: uppercase;
+  white-space: nowrap;
   border-top: 2px solid transparent;
   border-radius: 0;
 }
+nav.tabs button .ico { margin-right: 2px; }
 nav.tabs button.active { color: var(--accent); border-top-color: var(--accent); }
 nav.tabs button:active { color: var(--ink); }
 
 /* ---------- board ---------- */
-.board-wrap { display: flex; justify-content: center; padding: 10px 0 6px; }
+.board-wrap { display: flex; justify-content: center; width: 100%; padding: 10px var(--page-gutter) 6px; }
 .board {
-  width: var(--board-size); height: var(--board-size);
+  width: min(var(--board-size), 100%);
+  height: auto;
+  aspect-ratio: 1;
+  flex: 0 0 auto;
   display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr);
   outline: 3px solid var(--ink);
   outline-offset: -1px;
@@ -209,12 +258,17 @@ nav.tabs button:active { color: var(--ink); }
 /* ---------- game furniture ---------- */
 .game-top {
   display: flex; justify-content: space-between; align-items: baseline;
-  margin: 14px 18px 0; gap: 10px;
+  margin-top: 12px; gap: 10px;
+  padding-top: 2px;
 }
+.game-top .vs,
+.game-top .sub { overflow-wrap: anywhere; }
+.game-top > :first-child { min-width: 0; }
+.game-top > :last-child { text-align: right; }
 .game-top .vs { font-family: var(--serif); font-size: 1.02rem; }
 .game-top .sub { color: var(--ink-2); font-size: 0.84rem; }
 .status-bar {
-  text-align: center; margin: 6px 18px 0; min-height: 1.5em;
+  text-align: center; margin-top: 6px; min-height: 1.5em;
   font-family: var(--serif); font-size: 1.02rem; font-style: italic; color: var(--ink-2);
 }
 .status-bar.win { color: var(--ok); font-style: normal; font-weight: 600; }
@@ -228,7 +282,8 @@ nav.tabs button:active { color: var(--ink); }
 .move-list .ply { margin-right: 12px; white-space: nowrap; }
 
 /* ---------- home hero ---------- */
-.hero { padding: 26px 18px 18px; border-bottom: 1px solid var(--rule-2); }
+.hero { padding-top: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--rule-2); }
+.puzzle-hero { padding-top: 20px; padding-bottom: 14px; }
 .hero .brand { display: flex; align-items: baseline; justify-content: space-between; }
 .hero .brand h1 { font-size: 1.7rem; letter-spacing: 0.01em; }
 .hero .brand .est { font-family: var(--mono); font-size: 0.7rem; color: var(--ink-3); letter-spacing: 0.08em; }
@@ -247,7 +302,19 @@ nav.tabs button:active { color: var(--ink); }
 .statline .v { font-family: var(--serif); font-size: 1.15rem; font-weight: 600; }
 
 /* ---------- chips (kept, but inked) ---------- */
-.puzzle-meta { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 18px; }
+.puzzle-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  margin-bottom: 6px;
+}
+.card {
+  width: calc(100% - var(--page-gutter) * 2);
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: 14px var(--page-gutter);
+}
 .chip {
   font-family: var(--mono); font-size: 0.72rem;
   border: 1px solid var(--rule-2); color: var(--ink-2);
@@ -259,14 +326,26 @@ nav.tabs button:active { color: var(--ink); }
 .feedback.bad { color: var(--bad); font-style: normal; font-weight: 600; }
 
 /* ---------- stats ---------- */
-.spark { width: 100%; height: 84px; display: block; margin: 4px 0; }
+.spark {
+  width: calc(100% - var(--page-gutter) * 2);
+  max-width: var(--content-max);
+  height: 84px;
+  display: block;
+  margin: 4px auto;
+}
 .spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.5; }
 .list-tile { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--rule); font-size: 0.9rem; }
 .list-tile:last-child { border-bottom: none; }
 
 /* ---------- review ---------- */
-.review { max-height: 78vh; overflow-y: auto; padding: 2px; }
-.review .section { margin: 0 4px; }
+.review { max-height: 78vh; overflow-y: auto; padding: 2px; min-width: 0; }
+.review .section {
+  width: 100%;
+  max-width: 100%;
+  margin-left: 0;
+  margin-right: 0;
+}
+.review .evalgraph { width: 100%; }
 .evalgraph { width: 100%; height: 92px; display: block; background: var(--panel); border: 1px solid var(--rule-2); }
 .review-list { display: flex; flex-direction: column; gap: 2px; }
 .ply-tile, .moment-tile {
@@ -288,12 +367,12 @@ nav.tabs button:active { color: var(--ink); }
 }
 .modal {
   background: var(--paper); border-top: 3px solid var(--accent);
-  width: 100%; max-width: 540px;
-  padding: 16px 18px calc(16px + env(safe-area-inset-bottom));
+  width: min(100%, var(--content-max));
+  padding: 16px var(--page-gutter) calc(16px + var(--safe-bottom));
   max-height: 88vh; overflow-y: auto;
 }
 .toast {
-  position: fixed; bottom: calc(70px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
+  position: fixed; bottom: calc(70px + var(--safe-bottom)); left: 50%; transform: translateX(-50%);
   background: var(--ink); color: var(--paper);
   font-family: var(--mono); font-size: 0.78rem;
   padding: 8px 16px; z-index: 300; max-width: 86vw; text-align: center;
@@ -312,3 +391,8 @@ nav.tabs button:active { color: var(--ink); }
 .mode-tile .t { font-family: var(--serif); font-size: 1.04rem; font-weight: 600; }
 .mode-tile .d { color: var(--ink-2); font-size: 0.84rem; margin-top: 2px; }
 .mode-tile:active .t { color: var(--accent); }
+
+/* iOS home-screen apps can report a zero inset with a translucent status bar. */
+@media (display-mode: standalone) and (max-width: 600px) {
+  :root { --safe-top: max(44px, env(safe-area-inset-top, 0px)); }
+}

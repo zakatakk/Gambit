@@ -20,27 +20,35 @@ export async function openReview(rec: GameRecord): Promise<void> {
   }
   const bar = el('div', { class: 'progress' }, el('div', {}));
   const status = el('p', { class: 'muted' }, 'Preparing analysis…');
+  const retry = el('button', { class: 'small', style: 'display:none', onclick: () => void runReview() }, 'Retry analysis');
   const closeSheet = modal(
     el('h2', {}, 'Game review'),
     bar,
-    status
+    status,
+    retry
   );
-  void (async () => {
+
+  async function runReview(): Promise<void> {
+    retry.style.display = 'none';
+    (bar.firstChild as HTMLElement).style.width = '0%';
+    status.textContent = 'Preparing analysis…';
     try {
       const { engine } = await import('../engineClient');
       await engine.init('lite', () => {});
       const review = await deepReview(rec, (done, total, label) => {
         (bar.firstChild as HTMLElement).style.width = `${Math.round((done / Math.max(1, total)) * 100)}%`;
-        status.textContent = `${label}…`;
+        status.textContent = label;
       });
       await saveReview(rec.ts, review).catch(() => {});
       closeSheet();
       renderReview(rec, review);
     } catch (e) {
       status.textContent = `Review failed: ${(e as Error).message}`;
-      (bar.firstChild as HTMLElement).style.width = '0%';
+      retry.style.display = '';
     }
-  })();
+  }
+
+  void runReview();
 }
 
 function renderReview(rec: GameRecord, review: DeepReview): void {
@@ -50,7 +58,7 @@ function renderReview(rec: GameRecord, review: DeepReview): void {
   const content = el('div', { class: 'review' });
 
   // ---- Replay board (hidden until a ply is selected) ----
-  const replayHost = el('div');
+  const replayHost = el('div', { class: 'board-wrap' });
   const replayGame = new Chess(rec.startFen);
   const board = new Board(replayHost, replayGame, {
     orientation: rec.color,

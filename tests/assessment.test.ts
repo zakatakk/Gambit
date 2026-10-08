@@ -51,6 +51,38 @@ describe('assessment', () => {
     expect(prior.rating).toBeGreaterThan(1350);
   });
 
+  it('probe prior incorporates partial credit from recovered puzzles', () => {
+    const puzzles = Array.from({ length: 8 }, (_, i) => ({
+      id: String(i),
+      fen: '',
+      moves: [],
+      rating: 1400,
+      rd: 80,
+      popularity: 90,
+      themes: [],
+      won: true,
+      score: (i < 4 ? 0.75 : 1) as 0.75 | 1,
+    }));
+    const prior = priorFromPuzzles(puzzles);
+    expect(prior.rating).toBe(1400 + ((7 / 8 - 0.5) * 500));
+    expect(prior.rating).toBeLessThan(1600);
+  });
+
+  it('a partial-credit perfect streak does not use the perfect-probe bonus', () => {
+    const puzzles = Array.from({ length: 8 }, (_, i) => ({
+      id: String(i),
+      fen: '',
+      moves: [],
+      rating: 1400,
+      rd: 80,
+      popularity: 90,
+      themes: [],
+      won: true,
+      score: (i === 0 ? 0.75 : 1) as 0.75 | 1,
+    }));
+    expect(priorFromPuzzles(puzzles).rating).toBeLessThan(1650);
+  });
+
   it('staircase moves down on loss, up on win, stays on draw', () => {
     const s = newAssessment();
     s.currentLevel = 2;

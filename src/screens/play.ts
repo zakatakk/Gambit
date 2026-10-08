@@ -19,6 +19,13 @@ import {
 } from '../assessment';
 import type { AssessmentPuzzle } from '../assessment';
 import { loadPuzzles } from '../puzzles';
+import {
+  matchesPuzzleMove,
+  PUZZLE_TRY_LIMIT,
+  puzzleScoreForMistakes,
+  puzzleSolutionSan,
+  type PuzzleScore,
+} from '../puzzleScoring';
 import { openReview } from './reviewView';
 
 interface PlayParams {
@@ -49,12 +56,19 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   let assessed = (await getProfile()).assessed;
   let lastLevel = 2;
   let assess: AssessmentState = newAssessment();
-  let probe: { puzzle: AssessmentPuzzle; step: number } | null = null;
+  let probe: {
+    puzzle: AssessmentPuzzle;
+    step: number;
+    mistakes: number;
+    token: number;
+    complete: boolean;
+    solutionShown: boolean;
+  } | null = null;
   let probePool: PuzzleItem[] = [];
   let lastResult: 'win' | 'loss' | 'draw' = 'draw';
 
   // ---------- DOM ----------
-  const boardHost = el('div');
+  const boardHost = el('div', { class: 'board-wrap' });
   const opponentLabel = el('span', {}, 'CPU');
   const modeLabel = el('span', { class: 'sub' }, ' · casual');
   const topBar = el('div', { class: 'game-top' },
@@ -145,18 +159,67 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     controls.append(
       moveList,
       el('div', { class: 'btn-row', style: 'margin-top:8px' },
-        el('button', { onclick: () => skipProbe() }, 'Skip')),
+        el('button', { onclick: () => skipProbe() }, 'Show solution')),
       el('p', { class: 'muted', style: 'margin:6px 0 0' },
-        'Find the best move for the highlighted side. One wrong move fails the puzzle.')
+        `Find the best move. You have ${PUZZLE_TRY_LIMIT} tries; each miss lowers the assessment credit.`)
     );
   }
 
+  function controlsProbeResult(): void {
+    controls.textContent = '';
+    const activeProbe = probe;
+    const actions = el('div', { class: 'btn-row', style: 'margin-top:8px' });
+    if (activeProbe && !activeProbe.solutionShown) {
+      actions.append(el('button', { class: 'probe-solution-action', onclick: () => displayProbeSolution(activeProbe) }, 'Show solution'));
+    } else if (activeProbe?.complete) {
+      actions.append(el('button', { class: 'primary', onclick: () => finishProbe() },
+        probeIndex + 1 < assess.puzzles.length ? 'Next puzzle' : 'Start games'));
+    }
+    controls.append(moveList, actions);
+    if (activeProbe?.complete && !activeProbe.solutionShown) {
+      controls.append(el('p', { class: 'tiny' }, 'View the solution to continue.'));
+    }
+  }
+
+  function displayProbeSolution(activeProbe: NonNullable<typeof probe>): void {
+    activeProbe.solutionShown = true;
+    setStatus(`Solution: ${puzzleSolutionSan(activeProbe.puzzle.fen, activeProbe.puzzle.moves)}`);
+    controls.querySelector('.probe-solution-action')?.remove();
+    if (activeProbe.complete) controlsProbeResult();
+  }
+
+  function completeProbe(activeProbe: NonNullable<typeof probe>, score: PuzzleScore): void {
+    if (activeProbe.complete) return;
+    activeProbe.complete = true;
+    activeProbe.puzzle.score = score;
+    activeProbe.puzzle.mistakes = activeProbe.mistakes;
+    activeProbe.puzzle.won = score > 0;
+    board.setInteractive(false);
+    if (score === 0) {
+      setStatus(activeProbe.solutionShown ? `Solution: ${puzzleSolutionSan(activeProbe.puzzle.fen, activeProbe.puzzle.moves)}` : 'Three tries used — no credit.', 'lose');
+      controlsProbeResult();
+    } else {
+      setStatus(activeProbe.mistakes === 0 ? 'Solved!' : `Solved — ${Math.round(score * 100)}% credit.`, 'win');
+      controlsProbeResult();
+    }
+  }
+
   function skipProbe(): void {
-    if (mode !== 'probe') return;
-    const pz = assess.puzzles[probeIndex];
-    if (pz && pz.won === undefined) pz.won = false;
-    setStatus('Skipped — counts as unsolved.', 'lose');
-    setTimeout(() => finishProbe(false), 400);
+    if (mode !== 'probe' || !probe) return;
+    if (probe.complete) displayProbeSolution(probe);
+    else revealProbeSolution(probe);
+  }
+
+  function revealProbeSolution(activeProbe: NonNullable<typeof probe>): void {
+    activeProbe.token++;
+    activeProbe.puzzle.score = 0;
+    activeProbe.puzzle.mistakes = activeProbe.mistakes;
+    activeProbe.puzzle.won = false;
+    activeProbe.complete = true;
+    activeProbe.solutionShown = false;
+
+    board.setInteractive(false);
+    displayProbeSolution(activeProbe);
   }
 
   // ---------- engine helpers ----------
@@ -240,7 +303,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   }
 
   async function onUserMove(m: { from: string; to: string; promotion?: string }): Promise<void> {
-    if (thinking) return;
+    if (thinking || (mode === 'probe' && probe?.complete)) return;
     if (mode === 'probe') {
       await handleProbeMove(m, true);
       return;
@@ -408,6 +471,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     assess.currentLevel = lastLevel;
     mode = 'idle';
     toast(chosenMode === 'quick' ? 'Quick scan — 6 games.' : 'Ladder — from level 3 (~1200).');
+
     void startGame({ ladder: true, rating: ASSESSMENT_LEVELS[lastLevel].rating });
   }
 
@@ -417,7 +481,11 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     probeIndex = i;
     controlsProbe();
     const pz = assess.puzzles[i];
-    probe = { puzzle: pz, step: 0 };
+    probe = { puzzle: pz, step: 0, mistakes: 0, token: 0, complete: false, solutionShown: false };
+    pz.score = undefined;
+    pz.mistakes = undefined;
+    pz.won = undefined;
+
     // Lichess FEN is before the opponent's pre-move; play it to reach the solve position.
     const g = new Chess(pz.fen);
     const oppMove = pz.moves[0];
@@ -429,64 +497,86 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     board.setLastMove({ from: oppMove.slice(0, 2), to: oppMove.slice(2, 4) });
     board.setInteractive(true);
     board.render();
+    setStatus('Solve: find the best move.');
+    controlsProbe();
     moveList.textContent = `Puzzle ${i + 1} of ${assess.puzzles.length}`;
     modeLabel.textContent = ` · puzzle probe ${i + 1}/${assess.puzzles.length}`;
   }
 
   async function handleProbeMove(m: { from: string; to: string; promotion?: string } | null, byPlayer: boolean): Promise<void> {
-    if (!probe) return;
-    const pz = probe.puzzle;
+    if (!probe || probe.complete) return;
+    const activeProbe = probe;
+    const pz = activeProbe.puzzle;
     const solution = pz.moves.slice(1); // after opponent's opening move
-    const step = probe.step;
+    const step = activeProbe.step;
 
     if (!byPlayer) {
       // Engine's scripted reply
       const reply = solution[step];
-      if (reply) {
-        const mv = game.move({ from: reply.slice(0, 2), to: reply.slice(2, 4), promotion: reply[4] });
-        if (!mv) {
-          finishProbe(true);
-          return;
-        }
-        board.setLastMove({ from: reply.slice(0, 2), to: reply.slice(2, 4) });
-        board.render();
-        probe.step++;
-        if (probe.step >= solution.length) finishProbe(true);
+      if (!reply) {
+        completeProbe(activeProbe, puzzleScoreForMistakes(activeProbe.mistakes));
         return;
       }
-      finishProbe(true);
+      const mv = game.move({ from: reply.slice(0, 2), to: reply.slice(2, 4), promotion: reply[4] });
+      if (!mv) {
+        completeProbe(activeProbe, puzzleScoreForMistakes(activeProbe.mistakes));
+        return;
+      }
+      board.setLastMove({ from: reply.slice(0, 2), to: reply.slice(2, 4) });
+      board.render();
+      activeProbe.step++;
+      if (activeProbe.step >= solution.length) {
+        completeProbe(activeProbe, puzzleScoreForMistakes(activeProbe.mistakes));
+      } else {
+        setStatus('Your move.');
+        const token = ++activeProbe.token;
+        board.setInteractive(false);
+        setTimeout(() => {
+          if (probe !== activeProbe || activeProbe.complete || activeProbe.token !== token) return;
+          board.setInteractive(true);
+        }, 450);
+      }
       return;
     }
 
     if (!m) return;
     const expected = solution[step];
-    const ok = expected && m.from === expected.slice(0, 2) && m.to === expected.slice(2, 4);
+    const ok = matchesPuzzleMove(m, expected);
+    if (!ok) {
+      activeProbe.mistakes++;
+      play('fail');
+      if (activeProbe.mistakes >= PUZZLE_TRY_LIMIT) {
+        completeProbe(activeProbe, 0);
+      } else {
+        const score = Math.round(puzzleScoreForMistakes(activeProbe.mistakes) * 100);
+        setStatus(`Not quite — ${score}% credit if solved; ${PUZZLE_TRY_LIMIT - activeProbe.mistakes} ${PUZZLE_TRY_LIMIT - activeProbe.mistakes === 1 ? 'try' : 'tries'} left.`, 'lose');
+        controlsProbe();
+      }
+      return;
+    }
+
     const move = game.move({ from: m.from, to: m.to, promotion: m.promotion ?? 'q' });
     if (!move) return;
     board.setLastMove({ from: m.from, to: m.to });
     board.render();
-    if (!ok) {
-      play('fail');
-      setStatus('Wrong — puzzle failed.', 'lose');
-      pz.won = false;
-      setTimeout(() => finishProbe(false), 700);
-      return;
-    }
     play(move.captured ? 'capture' : 'move');
-    probe.step++;
-    if (probe.step >= solution.length) {
-      pz.won = true;
+    activeProbe.step++;
+    if (activeProbe.step >= solution.length) {
       play('success');
-      setStatus('Solved!', 'win');
-      setTimeout(() => finishProbe(true), 700);
+      completeProbe(activeProbe, puzzleScoreForMistakes(activeProbe.mistakes));
       return;
     }
+    const token = ++activeProbe.token;
     setStatus('Correct — keep going.');
-    setTimeout(() => handleProbeMove(null, false), 550);
+    board.setInteractive(false);
+    setTimeout(() => {
+      if (probe !== activeProbe || activeProbe.complete || activeProbe.token !== token) return;
+      void handleProbeMove(null, false);
+    }, 550);
   }
 
-  function finishProbe(solved: boolean): void {
-    void solved;
+  function finishProbe(): void {
+    if (!probe?.complete || !probe.solutionShown) return;
     probe = null;
     const nextI = probeIndex + 1;
     if (nextI < assess.puzzles.length) {
@@ -566,7 +656,8 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       el('p', { class: 'muted' },
         'The CPU now defaults to this level. Puzzles match it too. You can re-run the assessment anytime from Settings.'),
       el('div', { class: 'btn-row' },
-        el('button', { class: 'primary', onclick: () => { document.querySelector('.modal-back')?.remove(); void startGame(); } }, 'Play vs CPU'),
+        el('button', { class: 'primary', onclick: () => { document.querySelector('.modal-back')?.remove(); app.navigate('home'); } }, 'Home'),
+        el('button', { onclick: () => { document.querySelector('.modal-back')?.remove(); void startGame(); } }, 'Play vs CPU'),
         el('button', { onclick: () => { document.querySelector('.modal-back')?.remove(); app.navigate('puzzles'); } }, 'Solve puzzles'))
     );
   }
@@ -574,6 +665,8 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   // ---------- boot ----------
   if (params.assessment) {
     void startAssessment(params.mode ?? 'probe');
+  } else if (params.rematch) {
+    void startGame();
   } else {
     controlsDefault();
     board.render();
