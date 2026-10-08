@@ -275,6 +275,11 @@ export class Board {
       if (this.markupOn && !this.editMode) this.startMarkup(e, sq);
       return;
     }
+    // Left-click clears all markup (Lichess/chess.com behavior); the click
+    // still goes through to select or move pieces.
+    if (this.markupOn && e.button === 0 && (this.marks.size > 0 || this.arrows.size > 0)) {
+      this.clearMarkup();
+    }
     if (!this.opts.interactive || this.previewFen !== null) return;
     if (!e.isPrimary) return; // pinch/second finger must not hijack a drag
     if (this.editMode) {
