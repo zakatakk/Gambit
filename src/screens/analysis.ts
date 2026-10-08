@@ -1,12 +1,15 @@
 /**
  * Analysis: study board with a vertical eval bar, a clickable move list with
  * keyboard navigation, the top engine lines (click one to play it), best-move
- * hint arrows, FEN loading, and a position editor (piece pockets, tap to place,
- * drag to move, drag off the board to delete). Boards share the real Board.
+ * hint arrows, a move-review panel (why each move was good or bad, with the
+ * engine's better move playable as a branch), FEN loading, and a position
+ * editor (piece pockets, tap to place, drag to move, drag off the board to
+ * delete). Boards share the real Board.
  */
 import { Chess } from 'chess.js';
 import { Board, boardSquareAt, type EditBrush } from '../board';
 import { AnalysisLine, evalFraction, formatEval } from '../analysisLine';
+import { explainMove, judgeMove, QUALITY_GLYPHS, QUALITY_LABELS, type MoveJudgement } from '../moveReview';
 import { engine } from '../engineClient';
 import { getSettings } from '../db';
 import { applyBoardTheme, applyPieceSet, pieceImg } from '../pieces';
@@ -35,6 +38,14 @@ interface EngineInfo {
   depth: number;
 }
 
+/** Engine's verdict on one position, kept per FEN for move review. */
+interface CachedEval {
+  whiteCp: number;
+  whiteMate: number | null;
+  bestUci: string | null;
+  depth: number;
+}
+
 export async function mountAnalysis(container: HTMLElement, _app: App): Promise<void> {
   const settings = await getSettings();
   if (!container.isConnected) return;
@@ -53,6 +64,10 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
   let engineFen = '';
   /** Message shown in the engine panel when there are no lines yet. */
   let infoText = '';
+  /** Engine eval per position FEN (White POV), so moves can be judged. */
+  const evalCache = new Map<string, CachedEval>();
+  /** Quality verdict per ply (1-based, matching line.index). */
+  const judgements = new Map<number, MoveJudgement>();
 
   const boardHost = el('div', { class: 'board-wrap analysis-board' });
   const evalFill = el('div', { class: 'eval-v-fill' });
@@ -63,6 +78,9 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
   boardHost.append(el('div', { class: 'eval-col' }, evalBar, evalLabel));
   const engineHead = el('div', { class: 'engine-head' }, 'Engine');
   const linesList = el('div', { class: 'engine-lines' });
+  const reviewHead = el('div', { class: 'engine-head' }, 'Move review');
+  const reviewBody = el('div', { class: 'review-body' });
+  const reviewPanel = el('section', { class: 'review-panel' }, reviewHead, reviewBody);
   const statusLine = el('div', { class: 'status-bar' }, '');
   const moveList = el('div', { class: 'move-list' });
 
@@ -117,6 +135,7 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
         statusLine),
       el('aside', { class: 'analysis-side' },
         el('section', { class: 'engine-panel' }, engineHead, linesList),
+        reviewPanel,
         el('section', { class: 'moves-panel' }, moveList),
         el('div', { class: 'btn-row' }, editButton, flipButton, resetButton, clearButton),
         el('details', { class: 'tools' },
@@ -277,6 +296,7 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     editButton.classList.toggle('active', on);
     pockets.style.display = on ? 'grid' : 'none';
     editBar.style.display = on ? 'flex' : 'none';
+    reviewPanel.style.display = on ? 'none' : '';
     if (on) {
       if (!brush) brush = { color: 'w', type: 'p' };
       renderPockets();
@@ -488,7 +508,7 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     board.setHints([]);
     board.render();
     if (sound) play('move');
-    renderMoves();
+    updateJudgements();
     navFirst.disabled = line.index === 0;
     navPrev.disabled = line.index === 0;
     navNext.disabled = line.index === line.list.length;
@@ -551,11 +571,15 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     }
     const plyButton = (index: number): HTMLButtonElement => {
       const current = line.index === index + 1;
+      const j = judgements.get(index + 1);
       const btn = el('button', {
         class: current ? 'ply current' : 'ply',
         'aria-current': current ? 'step' : 'false',
         onclick: () => goTo(index + 1),
-      }, moves[index].san) as HTMLButtonElement;
+      }, moves[index].san, j ? el('span', {
+        class: `badge q-${j.quality}`,
+        title: QUALITY_LABELS[j.quality],
+      }, QUALITY_GLYPHS[j.quality]) : null) as HTMLButtonElement;
       return btn;
     };
     for (let i = 0; i < moves.length; i += 2) {
@@ -600,13 +624,32 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     }
     if (disposed || myGeneration !== generation) return;
     const fen = game.fen();
+    // Held in an array so TS doesn't narrow it to `null` across the callback.
+    const tops: EngineInfo[] = [];
     try {
-      await engine.analyse(fen, THINK_MS, (cp, mate, pv, depth, multipv) => {
+      const best = await engine.analyse(fen, THINK_MS, (cp, mate, pv, depth, multipv) => {
         if (disposed || myGeneration !== generation) return;
         engineLines.set(multipv, { multipv, cp, mate, pv, depth });
+        if (multipv === 1) tops[0] = { multipv, cp, mate, pv, depth };
         renderLines();
       }, ENGINE_LINES);
-      if (!disposed && myGeneration === generation) setStatus('');
+      if (!disposed && myGeneration === generation) {
+        // Keep the best move for move review (the resolved bestmove).
+        const sideSign = fen.split(' ')[1] === 'b' ? -1 : 1;
+        const top = tops[0] ?? null;
+        if (top) {
+          evalCache.set(fen, {
+            whiteCp: (top.cp ?? 0) * sideSign,
+            whiteMate: top.mate === null ? null : top.mate * sideSign,
+            bestUci: best
+              ? `${best.from}${best.to}${best.promotion ?? ''}`
+              : top.pv[0] ?? null,
+            depth: top.depth,
+          });
+        }
+        updateJudgements();
+        setStatus('');
+      }
     } catch {
       if (!disposed && myGeneration === generation) setStatus('Engine unavailable — the board still works.');
     }
@@ -655,6 +698,85 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
   function playEngineLine(info: EngineInfo): void {
     if (engineFen !== game.fen() || !info.pv[0]) return;
     playUci(info.pv[0]);
+  }
+
+  // ---------- move review: why each move is good or bad --------------------
+
+  /** Recompute verdicts from the eval cache and refresh the UI. Cheap:
+   * pure map lookups, so it runs on every analysis completion and nav. */
+  function updateJudgements(): void {
+    judgements.clear();
+    const moves = line.list;
+    for (let ply = 1; ply <= moves.length; ply++) {
+      const j = judgeForPly(ply);
+      if (j) judgements.set(ply, j);
+    }
+    renderMoves();
+    renderReview();
+  }
+
+  function judgeForPly(ply: number): MoveJudgement | null {
+    const moves = line.list;
+    const move = moves[ply - 1];
+    if (!move) return null;
+    const beforeFen = ply === 1 ? line.rootFen : moves[ply - 2].fen;
+    const before = evalCache.get(beforeFen);
+    const after = evalCache.get(move.fen);
+    // Shallow searches are too noisy to judge moves fairly.
+    if (!before || !after || before.depth < 8 || after.depth < 8) return null;
+    return judgeMove({
+      playedUci: move.uci,
+      bestUci: before.bestUci,
+      beforeCp: before.whiteCp,
+      beforeMate: before.whiteMate,
+      afterCp: after.whiteCp,
+      afterMate: after.whiteMate,
+      mover: (beforeFen.split(' ')[1] === 'b' ? 'b' : 'w'),
+    });
+  }
+
+  /** Explain the move at the cursor and offer the engine's better move. */
+  function renderReview(): void {
+    const ply = line.index;
+    reviewBody.replaceChildren();
+    if (editMode) return;
+    if (ply === 0) {
+      reviewBody.append(el('p', { class: 'muted' }, 'Play a move to see how good it was.'));
+      return;
+    }
+    const move = line.list[ply - 1];
+    const j = judgements.get(ply);
+    if (!move || !j) {
+      reviewBody.append(el('p', { class: 'muted' },
+        'Not reviewed yet. Step back one move and forward again so the engine can score both positions.'));
+      return;
+    }
+    const num = `${Math.floor((ply - 1) / 2) + 1}${ply % 2 === 1 ? '.' : '…'}`;
+    const beforeFen = ply === 1 ? line.rootFen : line.list[ply - 2].fen;
+    const before = evalCache.get(beforeFen);
+    const bestSan = j.quality !== 'best' && before?.bestUci
+      ? pvToSan(beforeFen, [before.bestUci])
+      : null;
+    reviewBody.append(
+      el('div', { class: 'review-line' },
+        el('span', { class: 'review-chip' }, `${num} ${move.san}`),
+        el('span', { class: `badge q-${j.quality}` }, QUALITY_GLYPHS[j.quality]),
+        el('span', { class: 'muted' }, QUALITY_LABELS[j.quality])),
+      el('p', { class: 'review-why' }, explainMove(j, bestSan)));
+    if (j.quality !== 'best' && before?.bestUci && bestSan) {
+      reviewBody.append(el('button', {
+        class: 'primary review-play',
+        onclick: () => playBetter(before.bestUci as string, ply),
+      }, `Play ${bestSan} instead`));
+    }
+  }
+
+  /** Branch the line: go back before the played move and play the engine's
+   * move instead, so the user can compare. */
+  function playBetter(uci: string, ply: number): void {
+    if (ply < 1) return;
+    goTo(ply - 1);
+    playUci(uci);
   }
 
   function countPieces(g: Chess): { w: Record<string, number>; b: Record<string, number> } {

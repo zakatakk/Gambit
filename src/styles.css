@@ -902,6 +902,20 @@ body[data-screen='analysis'] .move-list button.ply { margin-right: 0; padding: 0
 body[data-screen='analysis'] .move-list button.ply:hover { background: var(--panel); }
 body[data-screen='analysis'] .move-list button.ply.current { color: var(--accent); opacity: 1; font-weight: 600; }
 
+/* ---------- analysis: move review (why moves are good or bad) ---------- */
+.review-panel { margin-top: 10px; }
+.review-body { display: flex; flex-direction: column; gap: 6px; }
+.review-line { display: flex; align-items: center; gap: 8px; }
+.review-chip { font-family: var(--mono); font-weight: 600; }
+.review-why { margin: 0; }
+.review-play { align-self: flex-start; }
+.badge { font-family: var(--mono); font-size: 0.72rem; font-weight: 700; margin-left: 4px; }
+.badge.q-best { color: var(--ok); }
+.badge.q-good { color: var(--ok); opacity: 0.75; }
+.badge.q-inaccuracy { color: var(--accent); }
+.badge.q-mistake { color: var(--accent); }
+.badge.q-blunder { color: var(--bad); }
+
 .analysis-help { margin: 10px 0 0; }
 .tools { margin-top: 8px; }
 .tools > summary { cursor: pointer; color: var(--ink-3); font-size: 0.85rem; padding: 4px 0; }
