@@ -906,6 +906,11 @@ body[data-screen='analysis'] .move-list button.ply.current { color: var(--accent
 .tools { margin-top: 8px; }
 .tools > summary { cursor: pointer; color: var(--ink-3); font-size: 0.85rem; padding: 4px 0; }
 
+/* Phone squares are about 40px wide, so the board labels can grow a little. */
+@media (max-width: 600px) {
+  .coord { font-size: 11px; }
+}
+
 /* Keyboard focus: one visible ring across every control, on light and dark themes. */
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
