@@ -1,6 +1,6 @@
 /* Gambit service worker: offline shell + asset caching. */
 const BASE = new URL(self.registration.scope).pathname;
-const CACHE_VERSION = 'v4';
+const CACHE_VERSION = 'v5';
 const SCOPE_ID = BASE.replace(/^\/+|\/+$/g, '').replace(/[^\w-]/g, '_') || 'root';
 const CACHE_PREFIX = `gambit-${SCOPE_ID}-`;
 const CACHE = CACHE_PREFIX + CACHE_VERSION;
@@ -42,6 +42,11 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+/* A missing asset on a static host comes back as the app's HTML page with a 200. */
+function isHtmlResponse(response) {
+  return (response.headers.get('content-type') || '').toLowerCase().includes('text/html');
+}
+
 function cacheResponse(event, response) {
   if (!response.ok || response.type === 'opaque') return;
   const copy = response.clone();
@@ -58,7 +63,7 @@ self.addEventListener('fetch', (event) => {
       const hit = await cache.match(event.request);
       if (hit) return hit;
       const response = await fetch(event.request);
-      cacheResponse(event, response);
+      if (!isHtmlResponse(response)) cacheResponse(event, response);
       return response;
     })());
     return;

@@ -17,7 +17,7 @@ interface InfoLine {
 const SEARCH_TIMEOUT_MIN_MS = 5_000;
 const SEARCH_TIMEOUT_GRACE_MS = 1_500;
 const ENGINE_INIT_TIMEOUT_MS = 90_000;
-const ENGINE_ASSET_CACHE = 'gambit-engine-assets-v2';
+const ENGINE_ASSET_CACHE = 'gambit-engine-assets-v3';
 const LITE_ENGINE_ASSETS = [
   { file: 'stockfish.js', size: 0 },
   { file: 'stockfish.wasm', size: 0 },
@@ -27,6 +27,12 @@ const FULL_ENGINE_ASSETS = [
   { file: 'stockfish-nnue-16-single.wasm', size: 575_029 },
   { file: 'nn-5af11540bbfe.nnue', size: 40_119_326 },
 ] as const;
+
+/** A static host answers a missing asset with the app's HTML page and a 200, so
+ * the content type is the only reliable signal that an engine file is absent. */
+function isHtmlResponse(res: Response): boolean {
+  return (res.headers.get('content-type') ?? '').toLowerCase().includes('text/html');
+}
 
 export async function fetchProgress(
   url: string,
@@ -40,13 +46,21 @@ export async function fetchProgress(
     // Private mode or quota restrictions should not prevent online play.
   }
 
-  if (cache && await cache.match(url)) {
-    onFrac(1);
-    return;
+  if (cache) {
+    const cached = await cache.match(url);
+    if (cached && !isHtmlResponse(cached)) {
+      onFrac(1);
+      return;
+    }
+    // A fallback page cached by an older build is never a valid engine file.
+    if (cached) await cache.delete(url);
   }
 
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Engine download failed (${res.status}): ${url}`);
+  if (isHtmlResponse(res)) {
+    throw new Error(`Engine file is missing from this deploy (the server sent a web page): ${url}`);
+  }
 
   // Cache the stream directly; the engine worker reuses these bytes instead of
   // downloading the asset again during startup.
@@ -66,8 +80,16 @@ export async function fetchProgress(
     received += value.length;
     if (total > 0) onFrac(Math.min(1, received / total));
   }
-  if (received === 0) throw new Error(`Downloaded engine asset is empty: ${url}`);
   await cacheWrite;
+  if (received === 0) {
+    await cache?.delete(url);
+    throw new Error(`Downloaded engine asset is empty: ${url}`);
+  }
+  // A truncated download must not stay cached; the next start should retry it.
+  if (expectedBytes && received !== expectedBytes) {
+    await cache?.delete(url);
+    throw new Error(`Engine file ${url} is ${received} bytes, expected ${expectedBytes}`);
+  }
   onFrac(1);
 }
 

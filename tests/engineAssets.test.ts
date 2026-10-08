@@ -43,6 +43,44 @@ describe('engine asset prefetch', () => {
     expect(progress).toEqual([1]);
   });
 
+  it('rejects an HTML fallback page instead of caching it', async () => {
+    const put = vi.fn(async () => undefined);
+    vi.stubGlobal('caches', { open: vi.fn(async () => ({ match: vi.fn(async () => undefined), put })) });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<!doctype html>', {
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+    })));
+
+    await expect(fetchProgress('/engine/nn.nnue', () => {}, 4)).rejects.toThrow('missing from this deploy');
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it('replaces an HTML page cached by an older build', async () => {
+    const cache = {
+      match: vi.fn(async () => new Response('<html></html>', { headers: { 'content-type': 'text/html' } })),
+      put: vi.fn(async () => undefined),
+      delete: vi.fn(async () => true),
+    };
+    vi.stubGlobal('caches', { open: vi.fn(async () => cache) });
+    const fetchStub = vi.fn(async () => new Response(new Uint8Array([1, 2]), {
+      headers: { 'content-type': 'application/octet-stream' },
+    }));
+    vi.stubGlobal('fetch', fetchStub);
+
+    await fetchProgress('/engine/nn.nnue', () => {}, 2);
+
+    expect(cache.delete).toHaveBeenCalledWith('/engine/nn.nnue');
+    expect(fetchStub).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a truncated download and does not keep it cached', async () => {
+    const cache = { match: vi.fn(async () => undefined), put: vi.fn(async () => undefined), delete: vi.fn(async () => true) };
+    vi.stubGlobal('caches', { open: vi.fn(async () => cache) });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array([1, 2]))));
+
+    await expect(fetchProgress('/engine/nn.nnue', () => {}, 4)).rejects.toThrow('expected 4');
+    expect(cache.delete).toHaveBeenCalledWith('/engine/nn.nnue');
+  });
+
   it('still loads online if Cache Storage is unavailable', async () => {
     vi.stubGlobal('caches', { open: vi.fn(async () => { throw new Error('quota'); }) });
     vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array([1, 2]))));
