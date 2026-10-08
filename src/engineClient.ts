@@ -206,6 +206,10 @@ export class EngineClient {
   private initialization: { tier: EngineTier; promise: Promise<void> } | null = null;
   private lineHandler: ((line: string) => void) | null = null;
   private activeSearchFailure: ((error: Error) => void) | null = null;
+  /** Rejects the active search without discarding the worker (used by cancelSearch). */
+  private activeSearchCancel: ((error: Error) => void) | null = null;
+  /** Output still owed by cancelled searches: their bestmove arrives after 'stop'. */
+  private staleBestmoves = 0;
 
   get tier(): EngineTier | null {
     return this.currentTier;
@@ -248,6 +252,7 @@ export class EngineClient {
 
     const worker = new Worker(engineUrl);
     this.worker = worker;
+    this.staleBestmoves = 0;
     try {
       await waitForEngineReady(worker, tier);
     } catch (error) {
@@ -257,7 +262,7 @@ export class EngineClient {
 
     if (this.worker !== worker) throw new Error('Engine worker was superseded during initialization');
 
-    worker.onmessage = (event: MessageEvent) => this.lineHandler?.(String(event.data));
+    worker.onmessage = (event: MessageEvent) => this.dispatchLine(String(event.data));
     worker.onerror = (event) => {
       const error = new Error(event.message || 'engine worker failed');
       if (this.activeSearchFailure) this.activeSearchFailure(error);
@@ -277,9 +282,28 @@ export class EngineClient {
     this.worker.postMessage(line);
   }
 
-  /** Cancel an active search without allowing a stale bestmove to reach the next screen. */
+  /** Route engine output. Lines from a cancelled search arrive before the next
+   * search's output (UCI is in order), so they are dropped up to its bestmove. */
+  private dispatchLine(line: string): void {
+    if (this.staleBestmoves > 0) {
+      if (line.startsWith('bestmove')) this.staleBestmoves--;
+      return;
+    }
+    this.lineHandler?.(line);
+  }
+
+  /** Cancel an active search: send 'stop' and keep the worker warm, so the next
+   * search starts immediately and its answer is never mixed with this one. */
   cancelSearch(): void {
-    this.activeSearchFailure?.(new Error('Engine search cancelled'));
+    const cancel = this.activeSearchCancel;
+    if (!cancel || !this.worker) return;
+    this.staleBestmoves++;
+    try {
+      this.worker.postMessage('stop');
+    } catch {
+      this.discardWorker(this.worker);
+    }
+    cancel(new Error('Engine search cancelled'));
   }
 
   private discardWorker(worker: Worker): void {
@@ -291,6 +315,7 @@ export class EngineClient {
       this.worker = null;
       this.currentTier = null;
       this.lineHandler = null;
+      this.staleBestmoves = 0;
     }
   }
 
@@ -312,12 +337,14 @@ export class EngineClient {
       let stopTimeout: ReturnType<typeof setTimeout> | undefined;
       let handleLine: (line: string) => void;
       let handleWorkerFailure: (error: Error) => void;
+      let handleCancel: (error: Error) => void;
 
       const cleanup = () => {
         if (timeout !== undefined) clearTimeout(timeout);
         if (stopTimeout !== undefined) clearTimeout(stopTimeout);
         if (this.lineHandler === handleLine) this.lineHandler = null;
         if (this.activeSearchFailure === handleWorkerFailure) this.activeSearchFailure = null;
+        if (this.activeSearchCancel === handleCancel) this.activeSearchCancel = null;
       };
       const fail = (error: Error, discardWorker = false) => {
         if (settled) return;
@@ -334,6 +361,7 @@ export class EngineClient {
       };
 
       handleWorkerFailure = (error) => fail(error, true);
+      handleCancel = (error) => fail(error);
       handleLine = (line) => {
         try {
           onLine(line, finish, (error) => fail(error));
@@ -343,6 +371,7 @@ export class EngineClient {
       };
       this.lineHandler = handleLine;
       this.activeSearchFailure = handleWorkerFailure;
+      this.activeSearchCancel = handleCancel;
       timeout = setTimeout(() => {
         try {
           this.send('stop');

@@ -49,6 +49,8 @@ export class Board {
   /** Right-click markup state: square highlights + from>to arrows. */
   private marks = new Set<string>();
   private arrows = new Set<string>();
+  /** Engine hints (e.g. analysis best move): drawn in blue, never cleared by the user. */
+  private hints: { from: string; to: string }[] = [];
   private markupDrag: { from: string; startX: number; startY: number; moved: boolean; cur: string } | null = null;
   private overlaySvg: SVGSVGElement | null = null;
   private squareEls = new Map<string, HTMLElement>();
@@ -98,6 +100,12 @@ export class Board {
 
   setLastMove(m: { from: string; to: string } | null): void {
     this.lastMove = m;
+  }
+
+  /** Replace the engine hint arrows (pass [] to remove them). */
+  setHints(hints: { from: string; to: string }[]): void {
+    this.hints = hints;
+    this.drawMarkup();
   }
 
   setInteractive(v: boolean): void {
@@ -414,6 +422,7 @@ export class Board {
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     const NS = 'http://www.w3.org/2000/svg';
     const GREEN = '#15781B';
+    const HINT = '#2F7DD6';
     const mark = (sq: string): void => {
       const { x, y } = this.sqXY(sq);
       const c = document.createElementNS(NS, 'circle');
@@ -426,7 +435,7 @@ export class Board {
       c.setAttribute('opacity', '0.9');
       svg.appendChild(c);
     };
-    const arrow = (from: string, to: string): void => {
+    const arrow = (from: string, to: string, color = GREEN): void => {
       const a = this.sqXY(from);
       const b = this.sqXY(to);
       const x1 = a.x + 0.5;
@@ -446,7 +455,7 @@ export class Board {
       line.setAttribute('y1', String(y1));
       line.setAttribute('x2', String(bx));
       line.setAttribute('y2', String(by));
-      line.setAttribute('stroke', GREEN);
+      line.setAttribute('stroke', color);
       line.setAttribute('stroke-width', '0.2');
       line.setAttribute('opacity', '0.8');
       svg.appendChild(line);
@@ -454,7 +463,7 @@ export class Board {
       const px = -uy * 0.26;
       const py = ux * 0.26;
       tip.setAttribute('points', `${x2},${y2} ${bx + px},${by + py} ${bx - px},${by - py}`);
-      tip.setAttribute('fill', GREEN);
+      tip.setAttribute('fill', color);
       tip.setAttribute('opacity', '0.85');
       svg.appendChild(tip);
     };
@@ -463,6 +472,7 @@ export class Board {
       const [from, to] = key.split('>');
       arrow(from, to);
     }
+    for (const hint of this.hints) arrow(hint.from, hint.to, HINT);
     const drag = this.markupDrag;
     if (drag?.moved && drag.cur && drag.cur !== drag.from) arrow(drag.from, drag.cur);
   }

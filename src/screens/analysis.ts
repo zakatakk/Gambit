@@ -1,10 +1,12 @@
 /**
- * Analysis: study board with a live eval bar, engine best line, FEN loading,
- * and a Lichess-style position editor (piece pockets, tap to place, drag to
- * move, drag off the board to delete). Boards share the real Board component.
+ * Analysis: study board with a vertical eval bar, a clickable move list with
+ * keyboard navigation, the top engine lines (click one to play it), best-move
+ * hint arrows, FEN loading, and a position editor (piece pockets, tap to place,
+ * drag to move, drag off the board to delete). Boards share the real Board.
  */
 import { Chess } from 'chess.js';
 import { Board, boardSquareAt, type EditBrush } from '../board';
+import { AnalysisLine, evalFraction, formatEval } from '../analysisLine';
 import { engine } from '../engineClient';
 import { getSettings } from '../db';
 import { applyBoardTheme, applyPieceSet, pieceImg } from '../pieces';
@@ -18,6 +20,20 @@ const EMPTY_FEN = '8/8/8/8/8/8/8/8 w - - 0 1';
 
 const TRAY_PIECES = ['k', 'q', 'r', 'b', 'n', 'p'] as const;
 const FILES_BY_INDEX = 'abcdefgh';
+/** Engine lines shown in the panel (MultiPV). */
+const ENGINE_LINES = 3;
+/** Search time per position; long enough to settle the top lines. */
+const THINK_MS = 1000;
+/** Plies of each engine line shown in the panel. */
+const PV_PLIES = 8;
+
+interface EngineInfo {
+  multipv: number;
+  cp: number | null;
+  mate: number | null;
+  pv: string[];
+  depth: number;
+}
 
 export async function mountAnalysis(container: HTMLElement, _app: App): Promise<void> {
   const settings = await getSettings();
@@ -26,42 +42,40 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
   applyBoardTheme(settings.boardTheme);
 
   const game = new Chess();
+  const line = new AnalysisLine(START_FEN);
   let disposed = false;
-  let analysing = false;
   let generation = 0;
   let editMode = false;
   /** Piece waiting to be placed in edit mode ('trash' removes on tap). */
   let brush: { color: Color; type: string } | 'trash' | null = null;
-  /** History of FENs for undo/redo navigation. */
-  const past: string[] = [];
-  const future: string[] = [];
-  /** Variations: extra lines from the current position, keyed by their first move SAN. */
-  const lines = new Map<string, string[]>();
+  /** Engine output for `engineFen`, keyed by MultiPV line number. */
+  let engineLines = new Map<number, EngineInfo>();
+  let engineFen = '';
+  /** Message shown in the engine panel when there are no lines yet. */
+  let infoText = '';
 
   const boardHost = el('div', { class: 'board-wrap analysis-board' });
-  const evalFill = el('div', {});
-  const evalBar = el('div', { class: 'eval-bar' }, evalFill);
-  const evalLabel = el('span', { class: 'eval-label' }, '0.0');
-  const lineLabel = el('div', { class: 'analysis-line muted' }, 'Move a piece or load a FEN to analyze.');
+  const evalFill = el('div', { class: 'eval-v-fill' });
+  const evalBar = el('div', { class: 'eval-v', title: 'White advantage' }, evalFill);
+  const evalLabel = el('div', { class: 'eval-v-label' }, '…');
+  // The eval column sits inside the board wrapper (ordered first in CSS), so
+  // the bar always matches the board height.
+  boardHost.append(el('div', { class: 'eval-col' }, evalBar, evalLabel));
+  const engineHead = el('div', { class: 'engine-head' }, 'Engine');
+  const linesList = el('div', { class: 'engine-lines' });
   const statusLine = el('div', { class: 'status-bar' }, '');
-  const moveList = el('div', { class: 'move-list' }, '—');
+  const moveList = el('div', { class: 'move-list' });
 
   const board = new Board(boardHost, game, {
     orientation: 'w',
     interactive: true,
     autoQueen: settings.autoQueen,
     showCoords: settings.showCoords,
+    markup: true,
     onEdit: (action) => handleEdit(action),
     onMove: (move) => {
-      // The Board validates legality; applying the move is this screen's job.
-      pushHistory();
-      const played = game.move({ from: move.from, to: move.to, promotion: move.promotion ?? 'q' });
-      if (!played) {
-        past.pop();
-        return;
-      }
-      board.setLastMove({ from: played.from, to: played.to });
-      onPositionChanged(true);
+      // The Board validates legality; the line records the move.
+      playUci(`${move.from}${move.to}${move.promotion ?? ''}`);
     },
   });
   board.setBrushResolver(() => brush as EditBrush);
@@ -75,41 +89,67 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
   const turnButton = el('button', { class: 'edit-chip on', onclick: () => toggleTurn() }, 'White to move');
   const editCopyButton = el('button', { class: 'edit-chip', onclick: () => void copyFen() }, 'Copy FEN');
 
-  const fenInput = el('input', { type: 'text', placeholder: 'Paste a FEN to explore…' }) as HTMLInputElement;
-  const loadButton = el('button', { onclick: () => loadFen() }, 'Load FEN');
+  // ---- navigation ----------------------------------------------------------
+  const navFirst = el('button', { class: 'nav-btn', 'aria-label': 'First move', onclick: () => goTo(0) }, '«');
+  const navPrev = el('button', { class: 'nav-btn', 'aria-label': 'Previous move', onclick: () => goTo(line.index - 1) }, '‹');
+  const navNext = el('button', { class: 'nav-btn', 'aria-label': 'Next move', onclick: () => goTo(line.index + 1) }, '›');
+  const navLast = el('button', { class: 'nav-btn', 'aria-label': 'Last move', onclick: () => goTo(line.list.length) }, '»');
+  const navRow = el('div', { class: 'nav-row-controls' }, navFirst, navPrev, navNext, navLast);
+
+  // ---- setup and tools -----------------------------------------------------
+  const editButton = el('button', { class: 'edit-toggle', onclick: () => setEditMode(!editMode) }, 'Edit position');
   const flipButton = el('button', { onclick: () => board.setOrientation(board.orientation === 'w' ? 'b' : 'w') }, 'Flip');
   const resetButton = el('button', { onclick: () => loadFenString(START_FEN) }, 'Start');
   const clearButton = el('button', { onclick: () => loadFenString(EMPTY_FEN, true) }, 'Clear');
   const copyButton = el('button', { onclick: () => void copyFen() }, 'Copy FEN');
-  const editButton = el('button', { class: 'edit-toggle', onclick: () => setEditMode(!editMode) }, 'Edit position');
-  const undoButton = el('button', { onclick: () => stepHistory(-1) }, 'Undo');
-  const redoButton = el('button', { onclick: () => stepHistory(1) }, 'Redo');
+  const fenInput = el('input', { type: 'text', placeholder: 'Paste a FEN to explore…' }) as HTMLInputElement;
+  const loadButton = el('button', { onclick: () => loadFen() }, 'Load FEN');
 
   container.append(
     el('div', { class: 'hero analysis-hero' },
-      el('div', { class: 'brand' }, el('h1', {}, 'Analysis')),
-      el('div', { class: 'analysis-eval' }, evalBar, evalLabel)),
-    boardHost,
-    pockets,
-    editBar,
-    lineLabel,
-    moveList,
-    el('div', { class: 'section analysis-config' },
-      el('div', { class: 'btn-row' }, undoButton, redoButton, flipButton),
-      el('div', { class: 'btn-row' }, editButton, turnButton, resetButton, clearButton),
-      el('div', { class: 'row' }, fenInput, loadButton),
-      el('div', { class: 'btn-row' }, copyButton),
-      el('p', { class: 'tiny', style: 'margin:8px 0 0' },
-        'Analyze freely. In Edit position: tap a pocket piece, then tap squares to place it — tap again on the same piece to remove it. Drag pieces to move them; drag off the board to delete. Pick Clear, then tap pieces to delete.')),
-    statusLine
-  );
+      el('div', { class: 'brand' }, el('h1', {}, 'Analysis'))),
+    el('div', { class: 'analysis-layout' },
+      el('div', { class: 'analysis-stage' },
+        boardHost,
+        navRow,
+        pockets,
+        editBar,
+        statusLine),
+      el('aside', { class: 'analysis-side' },
+        el('section', { class: 'engine-panel' }, engineHead, linesList),
+        el('section', { class: 'moves-panel' }, moveList),
+        el('div', { class: 'btn-row' }, editButton, flipButton, resetButton, clearButton),
+        el('details', { class: 'tools' },
+          el('summary', {}, 'Load or copy a position'),
+          el('div', { class: 'row' }, fenInput, loadButton),
+          el('div', { class: 'btn-row' }, copyButton, turnButton)),
+        el('p', { class: 'tiny analysis-help' },
+          'Click a move to step to it, or use ← → (Home / End). Click an engine line to play it. ' +
+          'Edit position starts a new line: tap a pocket piece, then tap squares; drag pieces to move, ' +
+          'drag off the board to delete.'))));
 
   container.addEventListener('screen-dispose', () => {
     disposed = true;
     generation++;
+    document.removeEventListener('keydown', onKey);
     document.body.classList.remove('editing');
     engine.cancelSearch();
   }, { once: true });
+  document.addEventListener('keydown', onKey);
+
+  function onKey(e: KeyboardEvent): void {
+    if (disposed || editMode) return;
+    const target = e.target as HTMLElement | null;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+    let next: number;
+    if (e.key === 'ArrowLeft') next = line.index - 1;
+    else if (e.key === 'ArrowRight') next = line.index + 1;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = line.list.length;
+    else return;
+    e.preventDefault();
+    goTo(next);
+  }
 
   function renderPockets(): void {
     pockets.replaceChildren();
@@ -255,12 +295,18 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     turnButton.classList.toggle('on', white);
   }
 
+  /** Setup edits (castling, en passant, turn, pieces) make the edited position
+   * the root of a new line, so the move list always starts from a real board. */
+  function commitSetup(): void {
+    line.reset(game.fen());
+    showCurrent(false, null);
+  }
+
   function toggleCastling(): void {
     const parts = game.fen().split(' ');
     parts[2] = parts[2] === '-' ? 'KQkq' : '-';
     game.load(parts.join(' '));
-    board.render();
-    syncEditChips();
+    commitSetup();
   }
 
   function toggleEnPassant(): void {
@@ -276,8 +322,7 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
       parts[3] = ep;
     }
     game.load(parts.join(' '));
-    board.render();
-    syncEditChips();
+    commitSetup();
   }
 
   /** A plausible en-passant target for `turn`: an enemy pawn that could have
@@ -336,17 +381,6 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     }
   }
 
-  function pushHistory(): void {
-    past.push(game.fen());
-    if (past.length > 200) past.shift();
-    future.length = 0;
-  }
-
-  /** Extra FEN fields (turn, castling, ep) survive free-form edits. */
-  function editFenParts(): string[] {
-    return game.fen().split(' ');
-  }
-
   /** Apply a piece map (square -> FEN letter) to the live game, tolerating
    * illegal mid-edit states (chess.js requires both kings, no pawns on rank
    * 1/8, no impossible checks). Returns false when not loadable. */
@@ -370,7 +404,7 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
       if (empty) row += String(empty);
       rows.push(row);
     }
-    const parts = editFenParts();
+    const parts = game.fen().split(' ');
     const candidate = `${rows.join('/')} ${parts[1]} ${parts[2]} ${parts[3]} 0 1`;
     const snapshot = game.fen();
     try {
@@ -379,9 +413,8 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
       game.load(snapshot); // not a loadable position; keep the old one
       return false;
     }
-    board.setLastMove(lastMove ?? null);
-    board.render();
-    onPositionChanged(false);
+    line.reset(game.fen());
+    showCurrent(false, lastMove ?? null);
     return true;
   }
 
@@ -395,25 +428,21 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     return pieces;
   }
 
+  function editRejected(): void {
+    toast('Position not loadable (needs both kings, legal checks).');
+  }
+
   function placePiece(piece: { color: Color; type: string }, to: string): void {
     const pieces = boardMap();
     pieces[to] = piece.color === 'w' ? piece.type.toUpperCase() : piece.type;
-    pushHistory();
-    if (!applyPieces(pieces)) {
-      past.pop(); // edit rejected; history untouched
-      toast('Position not loadable (needs both kings, legal checks).');
-    }
+    if (!applyPieces(pieces)) editRejected();
   }
 
   function removeAt(from: string): void {
     if (!game.get(from as never)) return;
     const pieces = boardMap();
     delete pieces[from];
-    pushHistory();
-    if (!applyPieces(pieces)) {
-      past.pop();
-      toast('Position not loadable (needs both kings, legal checks).');
-    }
+    if (!applyPieces(pieces)) editRejected();
   }
 
   /** Unconditional removal (contextmenu / trash drag target). */
@@ -428,26 +457,44 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     if (!moved) return;
     delete pieces[from];
     pieces[to] = moved;
-    pushHistory();
-    if (!applyPieces(pieces, { from, to })) {
-      past.pop();
-      toast('Position not loadable (needs both kings, legal checks).');
-    }
+    if (!applyPieces(pieces, { from, to })) editRejected();
   }
 
-  function stepHistory(direction: -1 | 1): void {
-    if (direction === -1 && past.length > 0) {
-      future.push(game.fen());
-      game.load(past.pop()!);
-    } else if (direction === 1 && future.length > 0) {
-      past.push(game.fen());
-      game.load(future.pop()!);
-    } else {
-      return;
-    }
-    board.setLastMove(null);
+  /** Play a UCI move from the current position, recording it on the line. */
+  function playUci(uci: string): boolean {
+    const played = game.move({
+      from: uci.slice(0, 2),
+      to: uci.slice(2, 4),
+      promotion: uci[4] ?? 'q',
+    });
+    if (!played) return false;
+    line.push({
+      san: played.san,
+      uci: `${played.from}${played.to}${played.promotion ?? ''}`,
+      fen: game.fen(),
+    });
+    showCurrent(true);
+    return true;
+  }
+
+  function goTo(index: number): void {
+    if (line.goTo(index)) showCurrent(false);
+  }
+
+  /** Load the line's current position into the board and refresh the panels. */
+  function showCurrent(sound: boolean, lastMove: { from: string; to: string } | null | undefined = undefined): void {
+    game.load(line.currentFen());
+    board.setLastMove(lastMove === undefined ? line.lastMove() : lastMove);
+    board.setHints([]);
     board.render();
-    onPositionChanged(false);
+    if (sound) play('move');
+    renderMoves();
+    navFirst.disabled = line.index === 0;
+    navPrev.disabled = line.index === 0;
+    navNext.disabled = line.index === line.list.length;
+    navLast.disabled = line.index === line.list.length;
+    if (editMode) syncEditChips();
+    scheduleAnalysis();
   }
 
   function loadFen(): void {
@@ -465,17 +512,14 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
       toast(`Invalid FEN: ${(error as Error).message}`);
       return;
     }
-    pushHistory();
     if (keepTurn) {
       const turn = game.turn();
       game.load(fen.replace(/\s[wb]\s/, ` ${turn} `));
     } else {
       game.load(fen);
     }
-    board.setLastMove(null);
     board.setOrientation(game.turn());
-    board.render();
-    onPositionChanged(false);
+    commitSetup();
   }
 
   async function copyFen(): Promise<void> {
@@ -487,14 +531,6 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     }
   }
 
-  function onPositionChanged(byLegalMove: boolean): void {
-    play('move');
-    board.render();
-    renderMoves(byLegalMove);
-    if (editMode) syncEditChips();
-    scheduleAnalysis();
-  }
-
   function swapTurn(turn: Color): void {
     const parts = game.fen().split(' ');
     parts[1] = turn;
@@ -503,28 +539,43 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     parts[4] = '0';
     parts[5] = '1';
     game.load(parts.join(' '));
-    board.render();
-    onPositionChanged(false);
+    commitSetup();
   }
 
-  function renderMoves(fromLegalMove: boolean): void {
-    const hist = game.history({ verbose: true });
-    if (hist.length === 0) {
-      moveList.textContent = '—';
+  function renderMoves(): void {
+    const moves = line.list;
+    moveList.replaceChildren();
+    if (moves.length === 0) {
+      moveList.append(el('span', { class: 'muted' }, 'No moves yet. Play a move on the board.'));
       return;
     }
-    moveList.textContent = '';
-    for (let i = 0; i < hist.length; i += 2) {
-      moveList.append(el('span', { class: 'ply' },
-        el('span', { class: 'num' }, `${i / 2 + 1}.`),
-        ` ${hist[i].san}${hist[i + 1] ? ' ' + hist[i + 1].san : ''}`));
+    const plyButton = (index: number): HTMLButtonElement => {
+      const current = line.index === index + 1;
+      const btn = el('button', {
+        class: current ? 'ply current' : 'ply',
+        'aria-current': current ? 'step' : 'false',
+        onclick: () => goTo(index + 1),
+      }, moves[index].san) as HTMLButtonElement;
+      return btn;
+    };
+    for (let i = 0; i < moves.length; i += 2) {
+      const row = el('div', { class: 'move-row' }, el('span', { class: 'num' }, `${i / 2 + 1}.`));
+      row.append(plyButton(i));
+      if (i + 1 < moves.length) row.append(plyButton(i + 1));
+      moveList.append(row);
     }
-    if (fromLegalMove) lines.set(`${hist.length}`, hist.map((m) => m.san));
+    moveList.querySelector('.current')?.scrollIntoView({ block: 'nearest' });
   }
 
   function scheduleAnalysis(): void {
     const myGeneration = ++generation;
-    if (analysing) engine.cancelSearch();
+    // A search for the previous position must end before a new one starts.
+    engine.cancelSearch();
+    engineLines = new Map();
+    engineFen = game.fen();
+    infoText = '';
+    renderLines();
+    evalLabel.textContent = '…';
     void runAnalysis(myGeneration);
   }
 
@@ -532,50 +583,78 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     if (disposed || myGeneration !== generation) return;
     const counts = countPieces(game);
     if (counts.w.k === 0 || counts.b.k === 0) {
-      lineLabel.textContent = 'Add both kings to analyze this position.';
-      setStatus('');
+      setInfo('Add both kings to analyze this position.');
       return;
     }
     if (game.isGameOver()) {
-      lineLabel.textContent = game.isCheckmate() ? 'Checkmate.' : 'Draw.';
+      setInfo(game.isCheckmate() ? 'Checkmate.' : 'Draw.');
       return;
     }
-    analysing = true;
-    setStatus('Evaluating…');
+    setInfo('Thinking…');
     try {
       await engine.init('lite');
     } catch {
-      setStatus('Engine unavailable — board still works.');
-      analysing = false;
+      setStatus('Engine unavailable — the board still works.');
+      setInfo('Engine unavailable.');
       return;
     }
-    if (disposed || myGeneration !== generation) {
-      analysing = false;
-      return;
-    }
+    if (disposed || myGeneration !== generation) return;
     const fen = game.fen();
-    const turnSign = game.turn() === 'w' ? 1 : -1;
     try {
-      const move = await engine.analyse(fen, 900, (cp, mate, pv) => {
-        if (disposed || myGeneration !== generation || game.fen() !== fen) return;
-        if (mate !== null) {
-          evalLabel.textContent = `M${Math.abs(mate)}`;
-          evalFill.style.width = mate * turnSign > 0 ? '96%' : '4%';
-        } else if (cp !== null) {
-          const whiteCp = cp * turnSign;
-          const clamped = Math.max(-1000, Math.min(1000, whiteCp));
-          evalFill.style.width = `${50 + (clamped / 1000) * 45}%`;
-          evalLabel.textContent = whiteCp > 0 ? `+${(whiteCp / 100).toFixed(1)}` : (whiteCp / 100).toFixed(1);
-        }
-        if (pv.length > 0) lineLabel.textContent = `Best line: ${pvToSan(fen, pv)}`;
-      }, 1);
-      if (disposed || myGeneration !== generation || game.fen() !== fen) return;
-      setStatus(`Engine prefers ${move.from}→${move.to}.`);
+      await engine.analyse(fen, THINK_MS, (cp, mate, pv, depth, multipv) => {
+        if (disposed || myGeneration !== generation) return;
+        engineLines.set(multipv, { multipv, cp, mate, pv, depth });
+        renderLines();
+      }, ENGINE_LINES);
+      if (!disposed && myGeneration === generation) setStatus('');
     } catch {
-      if (!disposed && myGeneration === generation) setStatus('Engine unavailable — board still works.');
-    } finally {
-      if (myGeneration === generation) analysing = false;
+      if (!disposed && myGeneration === generation) setStatus('Engine unavailable — the board still works.');
     }
+  }
+
+  /** Redraw the engine panel, the eval bar, and the best-move hint from the
+   * latest engine output for `engineFen`. */
+  function renderLines(): void {
+    const rows = [...engineLines.values()]
+      .filter((info) => info.pv.length > 0)
+      .sort((a, b) => a.multipv - b.multipv);
+    const top = rows[0];
+    const sideSign = engineFen.split(' ')[1] === 'b' ? -1 : 1;
+    linesList.replaceChildren();
+    if (!top) {
+      linesList.append(el('div', { class: 'muted' }, infoText || 'Waiting for the engine…'));
+    } else {
+      engineHead.textContent = `Stockfish Lite · depth ${top.depth}`;
+      for (const info of rows) {
+        const whiteCp = info.cp === null ? null : info.cp * sideSign;
+        const whiteMate = info.mate === null ? null : info.mate * sideSign;
+        const button = el('button', {
+          class: 'engine-line',
+          title: 'Play this line',
+          onclick: () => playEngineLine(info),
+        },
+          el('span', { class: 'eval-chip' }, formatEval(whiteCp, whiteMate)),
+          el('span', { class: 'pv' }, pvToSan(engineFen, info.pv)));
+        button.disabled = engineFen !== game.fen();
+        linesList.append(button);
+      }
+    }
+
+    if (top) {
+      const whiteCp = top.cp === null ? null : top.cp * sideSign;
+      const whiteMate = top.mate === null ? null : top.mate * sideSign;
+      evalFill.style.height = `${evalFraction(whiteCp, whiteMate) * 100}%`;
+      evalLabel.textContent = formatEval(whiteCp, whiteMate);
+      const hint = top.pv[0];
+      board.setHints(engineFen === game.fen() && hint
+        ? [{ from: hint.slice(0, 2), to: hint.slice(2, 4) }]
+        : []);
+    }
+  }
+
+  function playEngineLine(info: EngineInfo): void {
+    if (engineFen !== game.fen() || !info.pv[0]) return;
+    playUci(info.pv[0]);
   }
 
   function countPieces(g: Chess): { w: Record<string, number>; b: Record<string, number> } {
@@ -592,7 +671,7 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
   function pvToSan(fen: string, pv: string[]): string {
     const probe = new Chess(fen);
     const sans: string[] = [];
-    for (const uci of pv.slice(0, 6)) {
+    for (const uci of pv.slice(0, PV_PLIES)) {
       try {
         sans.push(probe.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] }).san);
       } catch {
@@ -606,7 +685,12 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     statusLine.textContent = s;
   }
 
+  function setInfo(text: string): void {
+    infoText = text;
+    renderLines();
+  }
+
   // ---------- boot ----------
   setEditMode(false);
-  onPositionChanged(false);
+  showCurrent(false);
 }

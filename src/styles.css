@@ -849,3 +849,74 @@ body[data-screen='stats'] .moment-tile .chip { display: none; }
 @media (display-mode: standalone) and (max-width: 600px) {
   :root { --safe-top: max(44px, env(safe-area-inset-top, 0px)); }
 }
+
+/* ---------- analysis: layout, eval column, move list, engine lines ---------- */
+.analysis-layout { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; }
+.analysis-stage { flex: 0 0 auto; }
+.analysis-side {
+  flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  padding: 4px 0 6px;
+}
+
+/* Vertical eval bar: White fills from the bottom; the label sits under it. */
+.eval-col {
+  order: -1; flex: 0 0 auto; display: flex; flex-direction: column; align-items: center;
+  gap: 4px; width: 16px; margin-right: 8px;
+}
+.eval-v {
+  position: relative; flex: 1 1 auto; width: 14px; min-height: 60px; overflow: hidden;
+  border-radius: 3px; border: 1px solid var(--rule); background: var(--ink);
+}
+.eval-v-fill {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 50%;
+  background: var(--paper); transition: height 0.3s ease;
+}
+.eval-v-label { font-family: var(--mono); font-size: 0.7rem; color: var(--ink-2); white-space: nowrap; }
+
+.nav-row-controls { display: flex; justify-content: center; gap: 6px; margin-top: 4px; }
+.nav-row-controls button { min-width: 56px; padding: 5px 0; font-size: 1.05rem; line-height: 1; }
+.nav-row-controls button:disabled { opacity: 0.35; cursor: default; }
+
+.engine-head {
+  font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--ink-3); margin: 4px 0 6px;
+}
+.engine-lines { display: flex; flex-direction: column; gap: 4px; }
+.engine-line {
+  display: flex; gap: 10px; align-items: baseline; width: 100%; text-align: left;
+  padding: 6px 8px; border: 1px solid var(--rule-2); border-radius: var(--radius-btn);
+  background: var(--panel); color: var(--ink); font: inherit; font-size: 0.85rem; cursor: pointer;
+}
+.engine-line:disabled { cursor: default; opacity: 0.6; }
+.engine-line .eval-chip { font-family: var(--mono); font-weight: 600; min-width: 4.5ch; }
+.engine-line .pv {
+  font-family: var(--mono); font-size: 0.8rem; color: var(--ink-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+
+.moves-panel { margin-top: 8px; }
+body[data-screen='analysis'] .move-list { max-height: 150px; line-height: 1.6; font-size: 0.84rem; }
+.move-row { display: grid; grid-template-columns: 34px 1fr 1fr; gap: 2px 4px; align-items: baseline; }
+.move-row .num { min-width: 0; }
+body[data-screen='analysis'] .move-list button.ply { margin-right: 0; padding: 0 4px; border-radius: 3px; }
+body[data-screen='analysis'] .move-list button.ply:hover { background: var(--panel); }
+body[data-screen='analysis'] .move-list button.ply.current { color: var(--accent); opacity: 1; font-weight: 600; }
+
+.analysis-help { margin: 10px 0 0; }
+.tools { margin-top: 8px; }
+.tools > summary { cursor: pointer; color: var(--ink-3); font-size: 0.85rem; padding: 4px 0; }
+
+/* Desktop: board on the left, the analysis panel fills the right. */
+@media (min-width: 900px) {
+  body[data-screen='analysis'] #app { width: min(100%, 1120px); }
+  body[data-screen='analysis'] .analysis-layout { flex-direction: row; align-items: stretch; gap: 36px; }
+  body[data-screen='analysis'] .analysis-side { flex: 1 1 0; min-width: 300px; max-width: 460px; padding-top: 8px; }
+  body[data-screen='analysis'] .board-wrap { --board-size: min(calc(100dvh - 200px), 620px, 52vw); }
+  body[data-screen='analysis'].editing .board-wrap { --board-size: min(calc(100dvh - 330px), 600px, 52vw); }
+  /* The stage must be as wide as the board plus the eval column, or the board's
+   * percentage width collapses to its content width in the row layout. */
+  body[data-screen='analysis'] .analysis-stage { width: calc(min(calc(100dvh - 200px), 620px, 52vw) + 40px); }
+  body[data-screen='analysis'].editing .analysis-stage { width: calc(min(calc(100dvh - 330px), 600px, 52vw) + 40px); }
+  body[data-screen='analysis'] .move-list { max-height: none; flex: 1 1 auto; }
+  body[data-screen='analysis'] .moves-panel { display: flex; flex-direction: column; min-height: 140px; }
+}
