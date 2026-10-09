@@ -5,7 +5,7 @@ import { engine } from '../engineClient';
 import { ratingToStrength, ASSESSMENT_LEVELS } from '../engineStrength';
 import { applyGameResult, setProfileRating } from '../ratingOps';
 import { ratePeriod } from '../glicko2';
-import { getProfile, getSettings, updateSettings, addGame, updateGame, updateProfile, getSavedAssessment, saveSavedAssessment, getLiveGame, saveLiveGame, clearLiveGame, getReview } from '../db';
+import { getProfile, getSettings, addGame, updateGame, updateProfile, getSavedAssessment, saveSavedAssessment, getLiveGame, saveLiveGame, clearLiveGame, getReview } from '../db';
 import { applyBoardTheme, applyPieceSet, pieceImg } from '../pieces';
 import { ChessClock, formatClock } from '../clock';
 import { capturedSummary, ORDER as CAPTURED_ORDER } from '../captured';
@@ -794,8 +794,12 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       onStatus('Full engine unavailable — switching to lite…');
       await engine.init('lite');
       activeEngineTier = 'lite';
-      await updateSettings({ engineTier: 'lite' }).catch(() => {});
-      toast('Full engine unavailable. Continuing with lite.');
+      // Session-scoped fallback only. Writing 'lite' to the saved settings here
+      // is what silently uninstalled the full engine for good: one dropped
+      // 40MB boot (phone network, evicted cache, tab closed mid-boot) and the
+      // app behaved as if it had never been downloaded. The preference is left
+      // untouched so the next game tries the full engine again.
+      toast('Full engine unavailable — using lite this game.');
     }
   }
 

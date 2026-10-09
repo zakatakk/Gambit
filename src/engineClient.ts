@@ -477,6 +477,10 @@ export class EngineClient {
       }
     }, () => {
       this.send('ucinewgame');
+      // UCI options outlive a search, and play() leaves its handicap (Skill
+      // Level, sometimes 0) on this shared worker. Analysis must read true
+      // evals, so it always restores full strength first.
+      this.send('setoption name Skill Level value 20');
       this.send(`setoption name MultiPV value ${Math.max(1, Math.min(5, Math.floor(multiPv)))}`);
       this.send('setoption name UCI_LimitStrength value false');
       this.send(`position fen ${fen}`);

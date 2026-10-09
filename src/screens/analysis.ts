@@ -9,14 +9,22 @@
 import { Chess } from 'chess.js';
 import { Board, boardSquareAt, type EditBrush } from '../board';
 import { AnalysisLine, evalFraction, formatEval } from '../analysisLine';
-import { explainMove, judgeMove, QUALITY_GLYPHS, QUALITY_LABELS, type MoveJudgement } from '../moveReview';
+import {
+  CLEAR_LOSS_CP,
+  explainMove,
+  judgeMove,
+  QUALITY_GLYPHS,
+  QUALITY_LABELS,
+  type MoveJudgement,
+  type ParentLine,
+} from '../moveReview';
 import { engine } from '../engineClient';
 import { getSettings } from '../db';
 import { applyBoardTheme, applyPieceSet, pieceImg } from '../pieces';
 import { play } from '../sounds';
 import { el, toast } from '../ui';
 import type { App } from '../app';
-import type { Color } from '../types';
+import type { Color, EngineTier } from '../types';
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 const EMPTY_FEN = '8/8/8/8/8/8/8/8 w - - 0 1';
@@ -44,6 +52,10 @@ interface CachedEval {
   whiteMate: number | null;
   bestUci: string | null;
   depth: number;
+  /** The engine's top lines for this position (White POV, best first). Move
+   * review grades a played move against these, so the loss is measured inside
+   * one search instead of across two. */
+  lines: ParentLine[];
 }
 
 export async function mountAnalysis(container: HTMLElement, _app: App): Promise<void> {
@@ -51,6 +63,9 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
   if (!container.isConnected) return;
   applyPieceSet(settings.pieceSet);
   applyBoardTheme(settings.boardTheme);
+  /** Build to analyse with: the one the user installed and chose, downgraded to
+   * lite for this session only if the full engine will not boot. */
+  let analysisTier: EngineTier = settings.engineTier === 'full' ? 'full' : 'lite';
 
   const game = new Chess();
   const line = new AnalysisLine(START_FEN);
@@ -603,6 +618,34 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     void runAnalysis(myGeneration);
   }
 
+  /** Boot the engine analysis runs on: the user's chosen build, or lite for
+   * this session if the full engine will not boot. The saved preference is
+   * never rewritten — a dropped 40MB boot used to uninstall the full engine for
+   * good, which is why it could look like the engine had "gone". Returns false
+   * when neither build came up. */
+  async function ensureEngineForAnalysis(myGeneration: number): Promise<boolean> {
+    const onProgress = (phase: string, frac: number): void => {
+      if (disposed || myGeneration !== generation) return;
+      setInfo(phase === 'download' ? `Downloading engine ${Math.round(frac * 100)}%` : 'Booting engine…');
+    };
+    try {
+      await engine.init(analysisTier, onProgress);
+      return true;
+    } catch {
+      if (analysisTier !== 'full') return false;
+      analysisTier = 'lite';
+      if (!disposed && myGeneration === generation) {
+        toast('Full engine unavailable — using lite here.');
+      }
+      try {
+        await engine.init('lite', onProgress);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
+
   async function runAnalysis(myGeneration: number): Promise<void> {
     if (disposed || myGeneration !== generation) return;
     const counts = countPieces(game);
@@ -615,9 +658,7 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
       return;
     }
     setInfo('Thinking…');
-    try {
-      await engine.init('lite');
-    } catch {
+    if (!(await ensureEngineForAnalysis(myGeneration))) {
       setStatus('Engine unavailable — the board still works.');
       setInfo('Engine unavailable.');
       return;
@@ -638,6 +679,14 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
         const sideSign = fen.split(' ')[1] === 'b' ? -1 : 1;
         const top = tops[0] ?? null;
         if (top) {
+          const lines: ParentLine[] = [...engineLines.values()]
+            .filter((info) => info.pv.length > 0)
+            .sort((a, b) => a.multipv - b.multipv)
+            .map((info) => ({
+              uci: info.pv[0],
+              cp: info.cp === null ? null : info.cp * sideSign,
+              mate: info.mate === null ? null : info.mate * sideSign,
+            }));
           evalCache.set(fen, {
             whiteCp: (top.cp ?? 0) * sideSign,
             whiteMate: top.mate === null ? null : top.mate * sideSign,
@@ -645,6 +694,7 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
               ? `${best.from}${best.to}${best.promotion ?? ''}`
               : top.pv[0] ?? null,
             depth: top.depth,
+            lines,
           });
         }
         updateJudgements();
@@ -667,7 +717,10 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     if (!top) {
       linesList.append(el('div', { class: 'muted' }, infoText || 'Waiting for the engine…'));
     } else {
-      engineHead.textContent = `Stockfish Lite · depth ${top.depth}`;
+      // Name the build actually running: this label was fixed at "Stockfish
+      // Lite", so an installed full engine still looked missing.
+      const build = engine.tier === 'full' ? 'Full NNUE' : 'Stockfish Lite';
+      engineHead.textContent = `${build} · depth ${top.depth}`;
       for (const info of rows) {
         const whiteCp = info.cp === null ? null : info.cp * sideSign;
         const whiteMate = info.mate === null ? null : info.mate * sideSign;
@@ -732,6 +785,8 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
       afterCp: after.whiteCp,
       afterMate: after.whiteMate,
       mover: (beforeFen.split(' ')[1] === 'b' ? 'b' : 'w'),
+      lines: before.lines,
+      noiseFloorCp: CLEAR_LOSS_CP,
     });
   }
 
@@ -754,19 +809,24 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     const num = `${Math.floor((ply - 1) / 2) + 1}${ply % 2 === 1 ? '.' : '…'}`;
     const beforeFen = ply === 1 ? line.rootFen : line.list[ply - 2].fen;
     const before = evalCache.get(beforeFen);
-    const bestSan = j.quality !== 'best' && before?.bestUci
-      ? pvToSan(beforeFen, [before.bestUci])
-      : null;
+    // Only offer a replacement when the move actually gave something up, and
+    // never the move that was just played: a stale or noisy engine verdict must
+    // not contradict the line in front of the user.
+    const canImprove =
+      j.quality === 'inaccuracy' || j.quality === 'mistake' || j.quality === 'blunder';
+    const betterUci =
+      canImprove && before?.bestUci && before.bestUci !== move.uci ? before.bestUci : null;
+    const bestSan = betterUci ? pvToSan(beforeFen, [betterUci]) : null;
     reviewBody.append(
       el('div', { class: 'review-line' },
         el('span', { class: 'review-chip' }, `${num} ${move.san}`),
         el('span', { class: `badge q-${j.quality}` }, QUALITY_GLYPHS[j.quality]),
         el('span', { class: 'muted' }, QUALITY_LABELS[j.quality])),
       el('p', { class: 'review-why' }, explainMove(j, bestSan)));
-    if (j.quality !== 'best' && before?.bestUci && bestSan) {
+    if (betterUci && bestSan) {
       reviewBody.append(el('button', {
         class: 'primary review-play',
-        onclick: () => playBetter(before.bestUci as string, ply),
+        onclick: () => playBetter(betterUci, ply),
       }, `Play ${bestSan} instead`));
     }
   }
