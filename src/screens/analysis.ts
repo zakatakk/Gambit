@@ -8,7 +8,7 @@
  */
 import { Chess } from 'chess.js';
 import { Board, boardSquareAt, type EditBrush } from '../board';
-import { AnalysisLine, evalFraction, formatEval } from '../analysisLine';
+import { AnalysisLine, evalFraction, formatEval, seekState } from '../analysisLine';
 import {
   CLEAR_LOSS_CP,
   explainMove,
@@ -129,6 +129,22 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
   const navLast = el('button', { class: 'nav-btn', 'aria-label': 'Last move', onclick: () => goTo(line.list.length) }, '»');
   const navRow = el('div', { class: 'nav-row-controls' }, navFirst, navPrev, navNext, navLast);
 
+  // ---- seek bar ------------------------------------------------------------
+  // One stop per ply: dragging jumps anywhere in the line, while the buttons
+  // above still step move by move. Analysis follows the cursor either way.
+  const seekInput = el('input', {
+    type: 'range',
+    class: 'seek-range',
+    min: '0',
+    max: '0',
+    step: '1',
+    value: '0',
+    'aria-label': 'Seek to move',
+  });
+  const seekLabel = el('span', { class: 'seek-label', 'aria-hidden': 'true' }, '0/0');
+  const seekBar = el('div', { class: 'seek-bar' }, seekInput, seekLabel);
+  seekInput.addEventListener('input', () => goTo(Number(seekInput.value)));
+
   // ---- setup and tools -----------------------------------------------------
   const editButton = el('button', { class: 'edit-toggle', onclick: () => setEditMode(!editMode) }, 'Edit position');
   const flipButton = el('button', { onclick: () => board.setOrientation(board.orientation === 'w' ? 'b' : 'w') }, 'Flip');
@@ -145,6 +161,7 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
       el('div', { class: 'analysis-stage' },
         boardHost,
         navRow,
+        seekBar,
         pockets,
         editBar,
         statusLine),
@@ -158,7 +175,7 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
           el('div', { class: 'row' }, fenInput, loadButton),
           el('div', { class: 'btn-row' }, copyButton, turnButton)),
         el('p', { class: 'tiny analysis-help' },
-          'Click a move to step to it, or use ← → (Home / End). Click an engine line to play it. ' +
+          'Click a move to step to it, use ← → (Home / End), or drag the seek bar. Click an engine line to play it. ' +
           'Edit position starts a new line: tap a pocket piece, then tap squares; drag pieces to move, ' +
           'drag off the board to delete.'))));
 
@@ -312,6 +329,7 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     pockets.style.display = on ? 'grid' : 'none';
     editBar.style.display = on ? 'flex' : 'none';
     reviewPanel.style.display = on ? 'none' : '';
+    seekBar.style.display = on ? 'none' : '';
     if (on) {
       if (!brush) brush = { color: 'w', type: 'p' };
       renderPockets();
@@ -528,8 +546,19 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
     navPrev.disabled = line.index === 0;
     navNext.disabled = line.index === line.list.length;
     navLast.disabled = line.index === line.list.length;
+    syncSeek();
     if (editMode) syncEditChips();
     scheduleAnalysis();
+  }
+
+  /** Keep the seek slider and its label in step with the cursor. */
+  function syncSeek(): void {
+    const seek = seekState(line.list, line.index);
+    seekInput.max = String(seek.max);
+    seekInput.value = String(seek.value);
+    seekInput.disabled = seek.max === 0;
+    seekInput.setAttribute('aria-valuetext', seek.valueText);
+    seekLabel.textContent = seek.label;
   }
 
   function loadFen(): void {

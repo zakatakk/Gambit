@@ -5,6 +5,7 @@
  */
 import { Chess } from 'chess.js';
 import { Board } from '../board';
+import { seekState } from '../analysisLine';
 import { deepReview, type DeepReview, type PlyReview } from '../review';
 import { engine } from '../engineClient';
 import { CLS_COLORS, CLS_ORDER, mateScoreValue, winPct } from '../reviewScoring';
@@ -82,6 +83,26 @@ function renderReview(rec: GameRecord, review: DeepReview, showCoords = true): v
   });
   let shownPly = 0;
 
+  // ---- replay scrubber: step a ply at a time, or drag to any position ----
+  const seekInput = el('input', {
+    type: 'range',
+    class: 'seek-range',
+    min: '0',
+    max: String(replayMoves.length),
+    step: '1',
+    value: '0',
+    'aria-label': 'Seek to move',
+  });
+  const seekLabel = el('span', { class: 'seek-label', 'aria-hidden': 'true' }, `0/${replayMoves.length}`);
+  const navFirst = el('button', { class: 'nav-btn', 'aria-label': 'First move', onclick: () => showPly(0) }, '«');
+  const navPrev = el('button', { class: 'nav-btn', 'aria-label': 'Previous move', onclick: () => showPly(shownPly - 1) }, '‹');
+  const navNext = el('button', { class: 'nav-btn', 'aria-label': 'Next move', onclick: () => showPly(shownPly + 1) }, '›');
+  const navLast = el('button', { class: 'nav-btn', 'aria-label': 'Last move', onclick: () => showPly(replayMoves.length) }, '»');
+  const seekControls = el('div', { class: 'replay-seek' },
+    el('div', { class: 'nav-row-controls' }, navFirst, navPrev, navNext, navLast),
+    el('div', { class: 'seek-bar' }, seekInput, seekLabel));
+  seekInput.addEventListener('input', () => showPly(Number(seekInput.value)));
+
   function showPly(ply: number, highlightBest = false): void {
     const targetPly = Math.max(0, Math.min(ply, replayMoves.length));
     if (targetPly < shownPly) {
@@ -120,6 +141,18 @@ function renderReview(rec: GameRecord, review: DeepReview, showCoords = true): v
         onclick: () => showPly(reviewedPly.ply - 1),
       }, 'See position before'));
     }
+
+    // Keep the scrubber and its step buttons in step with the board: taps on
+    // the graph or the move list move the slider too.
+    const seek = seekState(review.plies, shownPly);
+    seekInput.value = String(seek.value);
+    seekInput.disabled = seek.max === 0;
+    seekInput.setAttribute('aria-valuetext', seek.valueText);
+    seekLabel.textContent = seek.label;
+    navFirst.disabled = shownPly === 0;
+    navPrev.disabled = shownPly === 0;
+    navNext.disabled = shownPly >= replayMoves.length;
+    navLast.disabled = shownPly >= replayMoves.length;
   }
 
   const graph = buildEvalGraph(review, (ply) => showPly(ply, true));
@@ -146,7 +179,7 @@ function renderReview(rec: GameRecord, review: DeepReview, showCoords = true): v
 
   content.append(
     graph,
-    el('div', { class: 'section' }, el('p', { class: 'kicker' }, 'Replay'), replayHost, replayCaption, bestBadge),
+    el('div', { class: 'section' }, el('p', { class: 'kicker' }, 'Replay'), replayHost, seekControls, replayCaption, bestBadge),
     you,
     them,
     phases,

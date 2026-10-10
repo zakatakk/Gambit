@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AnalysisLine, evalFraction, formatEval } from '../src/analysisLine';
+import { AnalysisLine, evalFraction, formatEval, seekState } from '../src/analysisLine';
 
 const START = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 const AFTER_E4 = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1';
@@ -56,6 +56,39 @@ describe('AnalysisLine', () => {
     expect(line.list).toHaveLength(0);
     expect(line.index).toBe(0);
     expect(line.currentFen()).toBe(AFTER_D4);
+  });
+});
+
+describe('seekState', () => {
+  const line = new AnalysisLine(START);
+  line.push({ san: 'e4', uci: 'e2e4', fen: AFTER_E4 });
+  line.push({ san: 'c5', uci: 'c7c5', fen: AFTER_E4_C5 });
+  line.push({ san: 'd4', uci: 'd2d4', fen: AFTER_D4 });
+
+  it('has one stop per ply and no stops for an empty line', () => {
+    const empty = seekState([], 0);
+    expect(empty.max).toBe(0);
+    expect(empty.label).toBe('0/0');
+    expect(empty.valueText).toBe('Starting position, no moves yet');
+
+    const three = seekState(line.list, 0);
+    expect(three.max).toBe(3);
+    expect(three.value).toBe(0);
+    expect(three.label).toBe('0/3');
+    expect(three.valueText).toBe('Starting position');
+  });
+
+  it('labels the move under the cursor with its move number and side', () => {
+    expect(seekState(line.list, 1).valueText).toBe('Move 1.e4, ply 1 of 3');
+    expect(seekState(line.list, 2).valueText).toBe('Move 1...c5, ply 2 of 3');
+    expect(seekState(line.list, 3).valueText).toBe('Move 2.d4, ply 3 of 3');
+    expect(seekState(line.list, 3).label).toBe('3/3');
+  });
+
+  it('clamps a requested ply into the line', () => {
+    expect(seekState(line.list, 99).value).toBe(3);
+    expect(seekState(line.list, -4).value).toBe(0);
+    expect(seekState(line.list, 2.4).value).toBe(2);
   });
 });
 

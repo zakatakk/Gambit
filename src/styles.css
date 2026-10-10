@@ -812,6 +812,11 @@ body[data-screen='stats'] .moment-tile .chip { display: none; }
 .ply-tile .num { color: var(--ink-3); min-width: 34px; font-family: var(--mono); }
 .moment-tile { justify-content: space-between; flex-wrap: wrap; }
 .review .promo { display: none; }
+/* Replay scrubber: step buttons above a seek slider. The pane scrolls, so the
+ * label keeps clear of the scrollbar it would otherwise sit under. */
+.replay-seek { margin: 6px 0 2px; }
+.replay-seek .seek-bar { padding-right: 6px; }
+.replay-seek .seek-label { color: var(--ink-2); }
 
 /* ---------- modal: plain sheet, printed ---------- */
 .modal-back {
@@ -876,6 +881,24 @@ body[data-screen='stats'] .moment-tile .chip { display: none; }
 .nav-row-controls { display: flex; justify-content: center; gap: 6px; margin-top: 4px; }
 .nav-row-controls button { min-width: 56px; padding: 5px 0; font-size: 1.05rem; line-height: 1; }
 .nav-row-controls button:disabled { opacity: 0.35; cursor: default; }
+
+/* Seek bar: drag to jump straight to any ply (the nav buttons step one ply).
+ * Used by the analysis board and by the replay inside the game review sheet. */
+.seek-bar {
+  display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px;
+  width: 100%;
+  margin: 2px auto 0;
+}
+/* Analysis: line the scrubber up with the board, like the pockets do. */
+body[data-screen='analysis'] .seek-bar { width: calc(100% - var(--page-gutter) * 2); }
+.seek-bar input[type='range'] {
+  width: 100%; min-width: 0; height: 28px; margin: 0;
+}
+.seek-bar input[type='range']:disabled { opacity: 0.4; cursor: default; }
+.seek-bar .seek-label {
+  font-family: var(--mono); font-size: 0.7rem; color: var(--ink-3);
+  min-width: 6ch; text-align: right;
+}
 
 .engine-head {
   font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em;

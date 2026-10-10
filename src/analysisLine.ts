@@ -68,6 +68,42 @@ export class AnalysisLine {
   }
 }
 
+/** State for the seek control: the slider bounds and cursor plus the text that
+ * names the position under the cursor. Pure, so the clamps and wording are
+ * unit-tested instead of buried in the screen. */
+export interface SeekState {
+  /** Highest selectable ply (0 when the line has no moves). */
+  max: number;
+  /** Cursor ply, clamped into 0..max. */
+  value: number;
+  /** Compact label next to the slider, e.g. "0/12" or "6/12". */
+  label: string;
+  /** Long description for screen readers, e.g. "Move 3...Nf6, ply 6 of 12". */
+  valueText: string;
+}
+
+export function seekState(moves: readonly { san: string }[], index: number): SeekState {
+  const max = moves.length;
+  const value = Math.max(0, Math.min(max, Math.round(index)));
+  if (value === 0) {
+    return {
+      max,
+      value,
+      label: `0/${max}`,
+      valueText: max === 0 ? 'Starting position, no moves yet' : 'Starting position',
+    };
+  }
+  const move = moves[value - 1];
+  const number = Math.floor((value - 1) / 2) + 1;
+  const dots = value % 2 === 1 ? '.' : '...';
+  return {
+    max,
+    value,
+    label: `${value}/${max}`,
+    valueText: `Move ${number}${dots}${move.san}, ply ${value} of ${max}`,
+  };
+}
+
 /** Eval text from White's point of view: "+1.2", "-0.4", "0.0", "M3", "-M2". */
 export function formatEval(whiteCp: number | null, whiteMate: number | null): string {
   if (whiteMate !== null) {
