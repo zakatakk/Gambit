@@ -140,7 +140,15 @@ export async function deepReview(
   const whiteToMoveAtStart = game.turn() === 'w';
 
   for (const uci of moves) {
-    const move = game.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+    // chess.js throws on an illegal move rather than returning null, and a
+    // stored line can go stale (older format, hand-edited backup). Review the
+    // part that replays instead of failing the whole screen.
+    let move: { san: string } | null = null;
+    try {
+      move = game.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+    } catch {
+      break;
+    }
     if (!move) break;
     sanMoves.push(move.san);
     const fen = game.fen();

@@ -5,7 +5,7 @@ import { engine } from '../engineClient';
 import { ratingToStrength, ASSESSMENT_LEVELS } from '../engineStrength';
 import { applyGameResult, setProfileRating } from '../ratingOps';
 import { ratePeriod } from '../glicko2';
-import { getProfile, getSettings, addGame, updateGame, updateProfile, getSavedAssessment, saveSavedAssessment, getLiveGame, saveLiveGame, clearLiveGame, getReview } from '../db';
+import { getProfile, getSettings, updateSettings, addGame, updateGame, updateProfile, getSavedAssessment, saveSavedAssessment, getLiveGame, saveLiveGame, clearLiveGame, getReview } from '../db';
 import { applyBoardTheme, applyPieceSet, pieceImg } from '../pieces';
 import { ChessClock, formatClock } from '../clock';
 import { capturedSummary, ORDER as CAPTURED_ORDER } from '../captured';
@@ -14,7 +14,7 @@ import { serializeLiveGame, deserializeLiveGame, type SavedLiveGame } from '../l
 import { play } from '../sounds';
 import { el, modal, toast, confirmSheet } from '../ui';
 import type { App } from '../app';
-import type { Color, EngineTier, GameResult, GameRecord, PuzzleItem } from '../types';
+import type { Color, EngineTier, GameResult, GameRecord, PuzzleItem, Settings } from '../types';
 import { TIME_CONTROLS, UNTIMED, type TimeControl } from '../types';
 import {
   newAssessment,
@@ -36,6 +36,7 @@ import {
   puzzleSolutionSan,
   type PuzzleScore,
 } from '../puzzleScoring';
+import { seekState } from '../analysisLine';
 import { openReview } from './reviewView';
 
 interface PlayParams {
@@ -237,11 +238,14 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   const statusBar = el('div', { class: 'status-bar' }, '');
   const moveList = el('div', { class: 'move-list' }, '—');
   const controls = el('div', { class: 'section play-controls' });
-  const seekRow = el('div', { class: 'seek-row btn-row' },
-    el('button', { onclick: () => showPly(0) }, 'Start'),
-    el('button', { onclick: () => showPly((viewingPly ?? historyVerbose().length) - 1) }, 'Prev'),
-    el('button', { onclick: () => showPly((viewingPly ?? historyVerbose().length - 1) + 1) }, 'Next'),
-    el('button', { class: 'latest', onclick: () => showPly(null) }, 'Latest'));
+  // In-game replay: step a ply at a time or scrub anywhere in the game so far.
+  const seekPrev = el('button', { class: 'seek-step', 'aria-label': 'Previous move', onclick: () => showPly((viewingPly ?? historyVerbose().length) - 1) }, '‹');
+  const seekNext = el('button', { class: 'seek-step', 'aria-label': 'Next move', onclick: () => showPly((viewingPly ?? historyVerbose().length) + 1) }, '›');
+  const seekSlider = el('input', { type: 'range', min: '0', max: '0', step: '1', value: '0', 'aria-label': 'Seek to move' });
+  const seekLive = el('button', { class: 'seek-live', onclick: () => showPly(null) }, 'Live');
+  const seekLabel = el('span', { class: 'seek-label' });
+  const seekRow = el('div', { class: 'game-seek' }, seekPrev, seekSlider, seekNext, seekLive, seekLabel);
+  seekSlider.addEventListener('input', () => showPly(Number(seekSlider.value)));
   const board = new Board(boardHost, game, {
     orientation: 'w',
     interactive: false,
@@ -287,9 +291,14 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     const bottomColor: Color = topColor === 'w' ? 'b' : 'w';
     const label = (color: Color) =>
       gameType === 'passplay' ? (color === 'w' ? 'White' : 'Black') : color === playerColor ? 'You' : oppName;
-    const cell = (color: Color) =>
-      el('span', { class: `clock ${color}${game.turn() === color ? ' active' : ''}` },
-        el('b', {}, label(color)), formatClock(clock!.remainingMs(color)));
+    // Under 20 seconds the clock turns red: flag races need to be visible
+    // without reading the numbers mid-move.
+    const cell = (color: Color) => {
+      const left = clock!.remainingMs(color);
+      return el('span', {
+        class: `clock ${color}${game.turn() === color ? ' active' : ''}${left < 20_000 ? ' low' : ''}`,
+      }, el('b', {}, label(color)), formatClock(left));
+    };
     clockBar.replaceChildren(cell(topColor), cell(bottomColor));
   }
 
@@ -392,6 +401,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     clock = new ChessClock(saved.timeControl, game.turn(), () => performance.now(), saved.clocksMs);
     board.setOrientation(saved.type === 'passplay' ? game.turn() : playerColor);
     board.setLastMove(lastMove);
+    board.setHints([]);
     board.setInteractive(false);
     board.deselect();
     viewingPly = null;
@@ -408,6 +418,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       } catch (error) {
         if (generation === gameGeneration && container.isConnected) {
           setStatus(`Engine failed to load: ${(error as Error).message}`, 'lose');
+          showEngineRetry();
         }
         return;
       }
@@ -458,29 +469,94 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   }
 
   // ---------- game setup ----------
-  function showGameSetup(): void {
+  function clampStrength(value: number): number {
+    return Math.max(600, Math.min(2900, Math.round(value / 25) * 25));
+  }
+
+  /** One line on where the chosen opponent sits relative to the player. */
+  function strengthHint(value: number, base: number): string {
+    const diff = value - base;
+    if (Math.abs(diff) < 50) return `About your level (${base}).`;
+    return diff > 0
+      ? `${diff} above your ${base} — expect a hard game.`
+      : `${-diff} below your ${base} — a lighter game.`;
+  }
+
+  /** Remember the sheet's choices so the next game does not re-ask. */
+  function rememberGameChoice(timeControlId: string, color: string, opponent: number | null): void {
+    const lastColor = color as Settings['lastColor'];
+    settings.lastTimeControl = timeControlId;
+    settings.lastColor = lastColor;
+    if (opponent !== null) settings.lastOpponentRating = opponent;
+    void updateSettings({
+      lastTimeControl: timeControlId,
+      lastColor,
+      ...(opponent === null ? {} : { lastOpponentRating: opponent }),
+    }).catch(() => {});
+  }
+
+  /**
+   * New game sheet: the three choices worth making before a game — clock, color,
+   * and opponent strength. Strength used to be buried in Settings, so every game
+   * was locked to the profile rating until you left the board.
+   */
+  async function showGameSetup(): Promise<void> {
+    const player = await getProfile().catch(() => null);
+    if (!container.isConnected) return;
+    const base = Math.round(player?.rating ?? 1500);
+
     const tcSelect = el('select', {},
       ...TIME_CONTROLS.map((entry) => el('option', { value: entry.id }, entry.label))) as HTMLSelectElement;
+    if (TIME_CONTROLS.some((entry) => entry.id === settings.lastTimeControl)) {
+      tcSelect.value = settings.lastTimeControl as string;
+    }
     const colorSelect = el('select', {},
       el('option', { value: 'random' }, 'Random'),
       el('option', { value: 'w' }, 'White'),
       el('option', { value: 'b' }, 'Black')) as HTMLSelectElement;
+    colorSelect.value = settings.lastColor ?? 'random';
+
+    const strengthValue = el('b', {}, String(clampStrength(settings.lastOpponentRating ?? base)));
+    const strengthNote = el('p', { class: 'tiny', style: 'margin:2px 0 0' },
+      strengthHint(clampStrength(settings.lastOpponentRating ?? base), base));
+    const strengthSlider = el('input', {
+      type: 'range', min: '600', max: '2900', step: '25', 'aria-label': 'Opponent rating',
+    }) as HTMLInputElement;
+    strengthSlider.value = strengthValue.textContent ?? '';
+    const setStrength = (value: number): void => {
+      const next = clampStrength(value);
+      strengthSlider.value = String(next);
+      strengthValue.textContent = String(next);
+      strengthNote.textContent = strengthHint(next, base);
+    };
+    strengthSlider.addEventListener('input', () => setStrength(Number(strengthSlider.value)));
+
     const closeSheet = modal(
       el('h2', {}, 'New game'),
       el('div', { class: 'row' }, el('span', {}, 'Time control'), tcSelect),
       el('div', { class: 'row' }, el('span', {}, 'Your color'), colorSelect),
+      el('div', { class: 'row' }, el('span', {}, 'Opponent'), strengthValue),
+      strengthSlider,
+      strengthNote,
+      el('div', { class: 'btn-row strength-presets' },
+        el('button', { class: 'small', onclick: () => setStrength(base) }, 'My level'),
+        el('button', { class: 'small', onclick: () => setStrength(base - 400) }, '−400'),
+        el('button', { class: 'small', onclick: () => setStrength(base + 400) }, '+400')),
       el('p', { class: 'tiny' }, assessed
-        ? 'Games of 10+0 or slower are rated.'
+        ? 'Games of 10+0 or slower are rated. Clock, color, and opponent are remembered for next time.'
         : 'Casual until you establish a rating. Finish an assessment to make games rated.'),
       el('div', { class: 'btn-row' },
         el('button', { class: 'primary', onclick: () => {
           const entry = TIME_CONTROLS.find((tc) => tc.id === tcSelect.value) ?? TIME_CONTROLS[0];
           const color = colorSelect.value === 'random' ? undefined : (colorSelect.value as Color);
+          const opponent = clampStrength(Number(strengthSlider.value));
+          rememberGameChoice(entry.id, colorSelect.value, opponent);
           closeSheet();
-          void startGame({ color, timeControl: entry.tc });
+          void startGame({ color, timeControl: entry.tc, rating: opponent });
         } }, 'Play the CPU'),
         el('button', { onclick: () => {
           const entry = TIME_CONTROLS.find((tc) => tc.id === tcSelect.value) ?? TIME_CONTROLS[0];
+          rememberGameChoice(entry.id, colorSelect.value, null);
           closeSheet();
           void startPassPlay(entry.tc);
         } }, 'Two players')),
@@ -508,6 +584,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     board.setOrientation('w');
     board.setLastMove(null);
     board.clearMarkup();
+    board.setHints([]);
     board.setInteractive(true);
     board.deselect();
     viewingPly = null;
@@ -527,7 +604,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     board.setInteractive(false);
     board.clearPreview();
     viewingPly = null;
-    showSeekRow(false);
+    refreshSeek();
     gameGeneration++;
     thinking = false;
     mode = 'idle';
@@ -594,8 +671,10 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     if (live) {
       viewingPly = null;
       board.clearPreview();
+      board.setHints([]);
+      clock?.resume();
+      if (clock?.timed) startClockTimer();
       renderMoves();
-      showSeekRow(false);
       if (mode === 'game' || mode === 'ladder') {
         if (!game.isGameOver()) setStatus(game.turn() === playerColor ? 'Your move' : `${oppName} is thinking…`);
       }
@@ -604,24 +683,44 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     const clamped = Math.max(0, ply);
     const move = clamped === 0 ? null : history[clamped - 1];
     board.showPosition(fenAtPly(clamped), move ? { from: move.from, to: move.to } : null);
+    board.setHints([]);
     viewingPly = clamped;
+    // Looking back at the game must not burn the clock: freeze it until Live.
+    if (clock?.timed) {
+      clock.pause();
+      stopClockTimer();
+    }
     renderMoves();
-    showSeekRow(true);
+    const paused = clock?.timed ? ' · clock paused' : '';
     setStatus(clamped === 0
-      ? 'Viewing the start position. Tap Latest to return.'
-      : `Viewing move ${clamped} of ${history.length}. Tap Latest to return.`);
+      ? `Viewing the start position${paused}.`
+      : `Viewing move ${clamped} of ${history.length}${paused}.`);
   }
 
   function isViewing(): boolean {
     return viewingPly !== null;
   }
 
-  function showSeekRow(visible: boolean): void {
-    if (!seekRow) return;
-    seekRow.style.display = visible ? '' : 'none';
+  /** Refresh the replay scrubber: bounds, label, and step-button states. The
+   * row appears as soon as there is a move to look back at, and hides when the
+   * game is over or the board is showing a puzzle. */
+  function refreshSeek(): void {
+    const history = historyVerbose();
+    const playable = mode === 'game' || mode === 'ladder';
+    seekRow.style.display = playable && history.length > 0 ? '' : 'none';
+    const seek = seekState(history, viewingPly ?? history.length);
+    seekSlider.max = String(seek.max);
+    seekSlider.value = String(seek.value);
+    seekSlider.disabled = seek.max === 0;
+    seekSlider.setAttribute('aria-valuetext', seek.valueText);
+    seekLabel.textContent = seek.max === 0 ? '' : seek.label;
+    seekPrev.disabled = seek.value === 0;
+    seekNext.disabled = seek.value >= seek.max;
+    seekLive.disabled = viewingPly === null;
   }
 
   function renderMoves(): void {
+    refreshSeek();
     const hist = historyVerbose();
     if (hist.length === 0) {
       moveList.textContent = '—';
@@ -647,9 +746,9 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       controls.append(
         el('p', { class: 'kicker' }, 'Rated play'),
         el('div', { class: 'btn-row' },
-          el('button', { class: 'primary', onclick: () => showGameSetup() }, 'New game vs CPU')),
+          el('button', { class: 'primary', onclick: () => void showGameSetup() }, 'New game vs CPU')),
       el('p', { class: 'tiny', style: 'margin:6px 0 0' },
-        'Rated · CPU strength follows your rating'),
+        'Rated · set the clock and opponent in the next step'),
         el('div', { class: 'row', style: 'margin-top:8px' },
           el('span', { class: 'muted' }, 'Moves'), el('span', {}, '')),
         moveList
@@ -668,7 +767,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       el('div', { class: 'btn-row' },
         el('button', { onclick: () => void startAssessment('quick') }, 'Quick scan')),
       el('div', { class: 'btn-row' },
-        el('button', { onclick: () => showGameSetup() }, 'Casual game vs CPU')),
+        el('button', { onclick: () => void showGameSetup() }, 'Casual game vs CPU')),
       el('p', { class: 'tiny', style: 'margin:8px 0 0' },
         'You can re-run any assessment later from Settings.'),
       el('div', { class: 'row', style: 'margin-top:8px' },
@@ -803,6 +902,39 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     }
   }
 
+  /** A dead engine worker used to end the session: the game sat there with no
+   * way back. One tap now rebuilds the worker and resumes whatever is pending. */
+  function showEngineRetry(): void {
+    if (controls.querySelector('.engine-retry')) return;
+    controls.append(
+      el('div', { class: 'btn-row', style: 'margin-top:8px' },
+        el('button', { class: 'primary engine-retry', onclick: () => void retryEngine() }, 'Retry engine'))
+    );
+  }
+
+  async function retryEngine(): Promise<void> {
+    controls.querySelector('.engine-retry')?.parentElement?.remove();
+    setStatus('Restarting the engine…');
+    try {
+      await ensureEngine((s) => { if (container.isConnected) setStatus(s); });
+    } catch (error) {
+      if (container.isConnected) {
+        setStatus(`Engine still failing: ${(error as Error).message}`, 'lose');
+        showEngineRetry();
+      }
+      return;
+    }
+    if (!container.isConnected || game.isGameOver()) return;
+    if (mode !== 'game' && mode !== 'ladder') return;
+    if (game.turn() === playerColor) {
+      board.setInteractive(true);
+      setStatus('Your move');
+    } else {
+      setStatus(`${oppName} is thinking…`);
+      void engineMove();
+    }
+  }
+
   // ---------- game flow ----------
   async function startGame(opts?: { color?: Color; rating?: number; ladder?: boolean; timeControl?: TimeControl }): Promise<void> {
     const generation = ++gameGeneration;
@@ -837,6 +969,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     board.setOrientation(playerColor);
     board.setLastMove(null);
     board.clearMarkup();
+    board.setHints([]);
     board.setInteractive(false);
     board.deselect();
     viewingPly = null;
@@ -850,7 +983,10 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
         if (generation === gameGeneration && container.isConnected) setStatus(s);
       });
     } catch (e) {
-      if (generation === gameGeneration && container.isConnected) setStatus(`Engine failed to load: ${(e as Error).message}`, 'lose');
+      if (generation === gameGeneration && container.isConnected) {
+        setStatus(`Engine failed to load: ${(e as Error).message}`, 'lose');
+        showEngineRetry();
+      }
       return;
     }
     if (generation !== gameGeneration || !container.isConnected || (mode !== 'game' && mode !== 'ladder')) return;
@@ -885,6 +1021,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       thinking = false;
       board.setInteractive(game.turn() === playerColor && (mode === 'game' || mode === 'ladder'));
       setStatus(`Engine error: ${(e as Error).message}`, 'lose');
+      showEngineRetry();
     }
   }
 
@@ -893,10 +1030,11 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     if (!move) return false;
     clock?.movePlayed();
     board.setLastMove({ from: mv.from, to: mv.to });
+    board.setHints([]);
     if (isViewing()) {
       viewingPly = null;
       document.body.classList.remove('viewing');
-      showSeekRow(false);
+      refreshSeek();
     }
     board.render();
     renderMoves();
@@ -952,7 +1090,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     board.setInteractive(false);
     board.clearPreview();
     viewingPly = null;
-    showSeekRow(false);
+    refreshSeek();
     gameGeneration++;
     thinking = false;
     mode = 'idle';
@@ -1004,7 +1142,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     board.setInteractive(false);
     board.clearPreview();
     viewingPly = null;
-    showSeekRow(false);
+    refreshSeek();
     engine.cancelSearch();
     stopClockTimer();
     const wasLadder = mode === 'ladder';
@@ -1130,9 +1268,14 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       const mv = await engine.analyse(position, 600, () => {});
       if (generation !== gameGeneration || !container.isConnected || game.fen() !== position) return;
       if (!mv) throw new Error('no move');
-      setStatus(`Hint: consider ${sanOf(mv)}`);
+      // The arrow is the hint: reading a best move off the board beats SAN.
+      board.setHints([{ from: mv.from, to: mv.to }]);
+      setStatus(`Hint: ${sanOf(mv)} — the blue arrow shows it.`);
     } catch {
-      if (generation === gameGeneration && container.isConnected) setStatus('Hint unavailable.');
+      if (generation === gameGeneration && container.isConnected) {
+        board.setHints([]);
+        setStatus('Hint unavailable.');
+      }
     } finally {
       if (generation === gameGeneration && container.isConnected) {
         thinking = false;
@@ -1147,6 +1290,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     if (game.turn() === playerColor && game.history().length >= 2) game.undo();
     game.undo();
     board.setLastMove(null);
+    board.setHints([]);
     board.render();
     renderMoves();
     board.setInteractive(true);
@@ -1279,7 +1423,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     if (isViewing()) {
       viewingPly = null;
       document.body.classList.remove('viewing');
-      showSeekRow(false);
+      refreshSeek();
     }
     board.setLastMove({ from: oppMove.slice(0, 2), to: oppMove.slice(2, 4) });
     board.setInteractive(true);

@@ -45,6 +45,40 @@ describe('chess clock', () => {
     expect(clock.remainingMs('w')).toBe(0);
     expect(clock.remainingMs('b')).toBe(10_000);
   });
+
+  it('freezes while paused so browsing history costs no time', () => {
+    let t = 0;
+    const clock = new ChessClock({ base: 60, inc: 0 }, 'w', () => t);
+    t = 5_000;
+    clock.pause(); // banks the 5s already spent
+    expect(clock.paused).toBe(true);
+    expect(clock.remainingMs('w')).toBe(55_000);
+    t = 30_000; // a long look at an earlier position
+    expect(clock.remainingMs('w')).toBe(55_000);
+    expect(clock.flagged()).toBe(false);
+    clock.resume();
+    expect(clock.paused).toBe(false);
+    t = 32_000;
+    expect(clock.remainingMs('w')).toBe(53_000);
+  });
+
+  it('ignores pause and resume when untimed or already in that state', () => {
+    let t = 0;
+    const untimed = new ChessClock({ base: 0, inc: 0 }, 'w', () => t);
+    untimed.pause();
+    untimed.resume();
+    expect(untimed.paused).toBe(false);
+
+    const clock = new ChessClock({ base: 30, inc: 0 }, 'w', () => t);
+    clock.pause();
+    t = 1_000;
+    clock.pause(); // second pause keeps the banked value
+    expect(clock.remainingMs('w')).toBe(30_000);
+    clock.resume();
+    clock.resume(); // second resume does not restart the tick from a stale stamp
+    t = 3_000;
+    expect(clock.remainingMs('w')).toBe(28_000);
+  });
 });
 
 describe('formatClock', () => {

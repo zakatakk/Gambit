@@ -24,6 +24,32 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   return n;
 }
 
+/**
+ * Copy text to the clipboard, falling back to a selectable sheet when the
+ * clipboard is unavailable (iOS without a direct tap, denied permission,
+ * insecure origin). Copy used to fail with "Could not access the clipboard"
+ * and leave the user with no way to get the text at all.
+ */
+export async function copyText(text: string, label: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(`${label} copied.`);
+    return;
+  } catch {
+    /* fall through to the sheet below */
+  }
+  const area = el('textarea', { class: 'copy-area', rows: '7', readonly: true }) as HTMLTextAreaElement;
+  const close = modal(
+    el('h2', {}, `Copy ${label}`),
+    el('p', { class: 'muted' }, 'This browser refused the clipboard, so select the text below.'),
+    area,
+    el('div', { class: 'btn-row' }, el('button', { class: 'primary', onclick: () => close() }, 'Done'))
+  );
+  area.value = text;
+  area.focus();
+  area.select();
+}
+
 let toastTimer: number | undefined;
 export function toast(msg: string): void {
   document.querySelector('.toast')?.remove();

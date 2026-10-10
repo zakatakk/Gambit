@@ -23,9 +23,12 @@ export async function mountStats(container: HTMLElement, _app: App): Promise<voi
   ]);
   if (!container.isConnected) return;
 
-  const wins = games.filter((g) => g.result === 'win').length;
-  const losses = games.filter((g) => g.result === 'loss').length;
-  const draws = games.filter((g) => g.result === 'draw').length;
+  // Pass-and-play is stored as two rows (one per side), so it never counts as
+  // a win or a loss here — the record is about games against the engine.
+  const engineGames = games.filter((g) => g.type !== 'passplay');
+  const wins = engineGames.filter((g) => g.result === 'win').length;
+  const losses = engineGames.filter((g) => g.result === 'loss').length;
+  const draws = engineGames.filter((g) => g.result === 'draw').length;
   const solved = attempts.filter((a) => a.won).length;
 
   // Rating head: the big number doubles as the hero, sparkline underneath.
@@ -90,17 +93,52 @@ export async function mountStats(container: HTMLElement, _app: App): Promise<voi
       : reviewable.slice(0, REVIEWS_LIMIT).map((g) => reviewTile(g, reviewed.has(g.ts)))));
 
   const historyList = historyCard.querySelector('.stat-list') as HTMLElement;
-  historyList.replaceChildren(
-    ...(games.length === 0
+  /** Opening name per game, filled in once the deferred replay pass runs. */
+  const openingsByGame = new Map<number, string>();
+  let showAllGames = false;
+  renderHistory();
+
+  /**
+   * Recent games: every row opens the review for that game. These used to be
+   * inert text, so the only way to a game's analysis was the "Learn" card,
+   * which lists just the three newest games.
+   */
+  function renderHistory(): void {
+    const shown = showAllGames ? games : games.slice(0, HISTORY_LIMIT);
+    const rows: Node[] = games.length === 0
       ? [emptyNote('No games yet.')]
-      : games.slice(0, HISTORY_LIMIT).map((g) =>
-          el('div', { class: 'list-tile' },
-            el('span', {},
-              el('b', {}, g.result === 'win' ? 'W' : g.result === 'loss' ? 'L' : 'D'),
-              gameListLabel(g)),
-            el('span', { class: 'muted' },
-              new Date(g.ts).toLocaleDateString(),
-              g.ratingAfter ? ` · ${Math.round(g.ratingBefore ?? 0)}→${Math.round(g.ratingAfter)}` : '')))));
+      : shown.map(gameTile);
+    if (games.length > HISTORY_LIMIT && !showAllGames) {
+      rows.push(el('button', {
+        class: 'link-more',
+        onclick: () => { showAllGames = true; renderHistory(); },
+      }, `Show all ${games.length} games`));
+    }
+    historyList.classList.toggle('expanded', showAllGames);
+    historyList.replaceChildren(...rows);
+  }
+
+  /** One game: result, opponent, opening, date, and how the rating moved. */
+  function gameTile(g: GameRecord): HTMLElement {
+    const delta = g.ratingAfter !== undefined && g.ratingBefore !== undefined
+      ? Math.round(g.ratingAfter - g.ratingBefore)
+      : null;
+    const opening = openingsByGame.get(g.ts);
+    return el('button', {
+      class: 'list-tile game-row',
+      onclick: () => void openReview(g, () => container.isConnected),
+    },
+      el('span', { class: 'game-row-main' },
+        el('b', { class: `res res-${g.result}` }, g.result === 'win' ? 'W' : g.result === 'loss' ? 'L' : 'D'),
+        gameListLabel(g),
+        opening ? el('span', { class: 'muted' }, ` · ${opening}`) : null),
+      el('span', { class: 'muted' },
+        new Date(g.ts).toLocaleDateString(),
+        delta === null
+          ? null
+          : el('b', { class: `stat-delta ${delta >= 0 ? 'up' : 'down'}` },
+              ` ${delta >= 0 ? '+' : ''}${delta}`)));
+  }
 
   // Openings detection replays up to 12 plies per game; keep it off the paint path.
   void Promise.resolve().then(() => {
@@ -112,6 +150,7 @@ export async function mountStats(container: HTMLElement, _app: App): Promise<voi
       const replay = replayUci(g.startFen, uci.slice(0, 12));
       const info = detectOpening(replay.history({ verbose: true }));
       if (!info) continue;
+      openingsByGame.set(g.ts, info.name.split(':')[0]);
       const key = `${info.eco} ${info.name}`;
       const entry = openings.get(key) ?? { ...info, count: 0 };
       entry.count += 1;
@@ -126,6 +165,7 @@ export async function mountStats(container: HTMLElement, _app: App): Promise<voi
             el('div', { class: 'list-tile' },
               el('span', {}, el('b', {}, row.eco), ` ${row.name}`),
               el('span', { class: 'muted' }, `${row.count} ${row.count === 1 ? 'game' : 'games'}`)))));
+    renderHistory();
   });
 
   /** Human label per game type (CPU / assessment / pass-and-play). */

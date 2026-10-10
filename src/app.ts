@@ -32,6 +32,12 @@ const TABS = [
   { id: 'settings', label: 'Settings' },
 ] as const;
 
+/** Screen named by the URL hash (#stats), so a reload lands where you were. */
+function tabFromHash(): AppTab | null {
+  const id = location.hash.replace(/^#\/?/, '').split(/[?/]/)[0];
+  return TABS.some((tab) => tab.id === id) ? (id as AppTab) : null;
+}
+
 async function render(app: App, params?: Record<string, unknown>): Promise<void> {
   const version = ++renderVersion;
   const tabToRender = activeTab;
@@ -123,7 +129,17 @@ export function bootApp(): void {
 
   const app: App = {
     navigate(tab, params) {
+      // One history entry per screen: the phone's back gesture and the mouse
+      // Back button now return to the previous screen instead of leaving the
+      // app, and the hash makes a reload land on the same screen.
+      const changed = tab !== activeTab;
       activeTab = tab;
+      try {
+        if (changed) history.pushState({ gambitTab: tab }, '', `#${tab}`);
+        else history.replaceState({ gambitTab: tab }, '', `#${tab}`);
+      } catch {
+        /* sandboxed contexts without history: navigation still works */
+      }
       setSidebar(false);
       void render(app, params);
     },
@@ -131,6 +147,24 @@ export function bootApp(): void {
       return render(app);
     },
   };
+
+  const requested = tabFromHash();
+  if (requested) activeTab = requested;
+  // Seed the current entry so the first Back leaves the app rather than
+  // returning to a screen the user never opened.
+  try {
+    history.replaceState({ gambitTab: activeTab }, '', `#${activeTab}`);
+  } catch {
+    /* ignore */
+  }
+  window.addEventListener('popstate', (event) => {
+    const state = event.state as { gambitTab?: AppTab } | null;
+    const tab = state?.gambitTab ?? tabFromHash() ?? 'home';
+    if (tab === activeTab) return;
+    activeTab = tab;
+    setSidebar(false);
+    void render(app);
+  });
 
   // Render immediately; loading settings or the full engine must not block UI.
   void render(app);

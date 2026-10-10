@@ -22,7 +22,7 @@ import { engine } from '../engineClient';
 import { getSettings } from '../db';
 import { applyBoardTheme, applyPieceSet, pieceImg } from '../pieces';
 import { play } from '../sounds';
-import { el, toast } from '../ui';
+import { copyText, el, toast } from '../ui';
 import type { App } from '../app';
 import type { Color, EngineTier } from '../types';
 
@@ -76,6 +76,8 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
   let brush: { color: Color; type: string } | 'trash' | null = null;
   /** Engine output for `engineFen`, keyed by MultiPV line number. */
   let engineLines = new Map<number, EngineInfo>();
+  /** True while scoreThisMove() is walking the line for a missing verdict. */
+  let scoring = false;
   let engineFen = '';
   /** Message shown in the engine panel when there are no lines yet. */
   let infoText = '';
@@ -151,6 +153,7 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
   const resetButton = el('button', { onclick: () => loadFenString(START_FEN) }, 'Start');
   const clearButton = el('button', { onclick: () => loadFenString(EMPTY_FEN, true) }, 'Clear');
   const copyButton = el('button', { onclick: () => void copyFen() }, 'Copy FEN');
+  const copyPgnButton = el('button', { onclick: () => void copyPgn() }, 'Copy line');
   const fenInput = el('input', { type: 'text', placeholder: 'Paste a FEN to explore…' }) as HTMLInputElement;
   const loadButton = el('button', { onclick: () => loadFen() }, 'Load FEN');
 
@@ -173,7 +176,7 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
         el('details', { class: 'tools' },
           el('summary', {}, 'Load or copy a position'),
           el('div', { class: 'row' }, fenInput, loadButton),
-          el('div', { class: 'btn-row' }, copyButton, turnButton)),
+          el('div', { class: 'btn-row' }, copyButton, copyPgnButton, turnButton)),
         el('p', { class: 'tiny analysis-help' },
           'Click a move to step to it, use ← → (Home / End), or drag the seek bar. Click an engine line to play it. ' +
           'Edit position starts a new line: tap a pocket piece, then tap squares; drag pieces to move, ' +
@@ -587,12 +590,32 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
   }
 
   async function copyFen(): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(game.fen());
-      toast('FEN copied.');
-    } catch {
-      toast('Could not access the clipboard.');
+    await copyText(game.fen(), 'FEN');
+  }
+
+  /** PGN of the whole analysed line, so it can be pasted into another app. */
+  async function copyPgn(): Promise<void> {
+    if (line.list.length === 0) {
+      toast('Play a move first — there is no line to copy.');
+      return;
     }
+    const probe = new Chess(line.rootFen);
+    try {
+      for (const move of line.list) {
+        probe.move({ from: move.uci.slice(0, 2), to: move.uci.slice(2, 4), promotion: move.uci[4] });
+      }
+    } catch {
+      toast('Could not build a PGN for this line.');
+      return;
+    }
+    // chess.js pads the PGN with an empty seven-tag header; pasting that into
+    // another app is noise. Keep the moves, and tag the FEN only when the line
+    // starts somewhere other than the initial position.
+    const movetext = (probe.pgn().split('\n\n').pop() ?? '').trim();
+    const pgn = line.rootFen === START_FEN
+      ? movetext
+      : `[SetUp "1"]\n[FEN "${line.rootFen}"]\n\n${movetext}`;
+    await copyText(pgn, `line (${line.list.length} ${line.list.length === 1 ? 'ply' : 'plies'})`);
   }
 
   function swapTurn(turn: Color): void {
@@ -829,10 +852,23 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
       return;
     }
     const move = line.list[ply - 1];
+    if (!move) {
+      reviewBody.append(el('p', { class: 'muted' }, 'Play a move to see how good it was.'));
+      return;
+    }
     const j = judgements.get(ply);
-    if (!move || !j) {
-      reviewBody.append(el('p', { class: 'muted' },
-        'Not reviewed yet. Step back one move and forward again so the engine can score both positions.'));
+    if (!j) {
+      // Jumping straight to a ply (seek bar, move list) lands on a position
+      // whose predecessor was never analysed, so the verdict cannot exist yet.
+      reviewBody.append(
+        el('p', { class: 'muted' }, 'This move is not scored yet: the engine also needs the position before it.'),
+        // Re-read the cursor on click: the panel re-renders as the engine
+        // finishes, so a captured ply could act on a stale button.
+        el('button', {
+          class: 'small score-move',
+          disabled: scoring,
+          onclick: () => void scoreThisMove(line.index),
+        }, scoring ? 'Scoring…' : 'Score this move'));
       return;
     }
     const num = `${Math.floor((ply - 1) / 2) + 1}${ply % 2 === 1 ? '.' : '…'}`;
@@ -858,6 +894,47 @@ export async function mountAnalysis(container: HTMLElement, _app: App): Promise<
         onclick: () => playBetter(betterUci, ply),
       }, `Play ${bestSan} instead`));
     }
+  }
+
+  /**
+   * Score the move at `ply` on demand: walk one ply back so the engine scores
+   * the position before the move too, wait for both verdicts, then return to
+   * the move the user was looking at. Stepping there by hand was the only way.
+   */
+  async function scoreThisMove(ply: number): Promise<void> {
+    if (scoring || disposed || ply < 1) return;
+    scoring = true;
+    setStatus('Scoring this move…');
+    let ok = false;
+    try {
+      if (line.index !== ply - 1) goTo(ply - 1);
+      // Generous: the first search of a session also boots the engine.
+      if (await waitForEval(line.currentFen(), 12_000) && !disposed) {
+        goTo(ply);
+        ok = await waitForEval(line.currentFen(), 12_000);
+      }
+    } finally {
+      scoring = false;
+      if (!disposed) {
+        setStatus('');
+        updateJudgements();
+        if (!ok) toast('The engine could not score that position — try again.');
+      }
+    }
+  }
+
+  /** Resolve true once the engine has stored a verdict for `fen`. */
+  function waitForEval(fen: string, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    return new Promise((resolve) => {
+      const check = (): void => {
+        if (disposed) return resolve(false);
+        if (evalCache.has(fen)) return resolve(true);
+        if (Date.now() >= deadline) return resolve(false);
+        window.setTimeout(check, 150);
+      };
+      check();
+    });
   }
 
   /** Branch the line: go back before the played move and play the engine's

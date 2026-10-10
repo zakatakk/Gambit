@@ -387,6 +387,7 @@ a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset:
 .section:last-of-type { border-bottom: none; }
 .section > h2 { margin-bottom: 8px; }
 .muted { color: var(--ink-2); font-size: 0.88rem; }
+.mono-tiny { font-family: var(--mono); font-size: 0.75rem; color: var(--ink-2); }
 .tiny { color: var(--ink-3); font-size: 0.78rem; }
 .hr { border: none; border-top: 1px solid var(--rule); margin: 10px 0; }
 
@@ -424,6 +425,13 @@ button.quiet { border-color: transparent; background: none; color: var(--ink-2);
 .btn-row > button { flex: 1; }
 
 /* ---------- forms ---------- */
+.copy-area {
+  width: 100%; box-sizing: border-box; margin: 4px 0;
+  font-family: var(--mono); font-size: 0.78rem; line-height: 1.4;
+  color: var(--ink); background: var(--panel);
+  border: 1px solid var(--rule-2); border-radius: var(--radius-btn);
+  padding: 8px; resize: vertical;
+}
 input[type='range'] { width: 100%; accent-color: var(--accent); height: 34px; }
 select, input[type='number'] {
   font: inherit; font-size: 0.92rem;
@@ -576,7 +584,7 @@ body[data-screen='settings'] .preview-wrap { --board-size: min(52vw, 170px, max(
 .board-wrap { display: flex; justify-content: center; width: 100%; padding: 6px var(--page-gutter) 4px; }
 /* Idle play menu + in-game shrink the board so the whole page always fits
  * (clocks, captures, status, move list, and controls take the rest). */
-body[data-screen='play'] .board-wrap { --board-size: min(86vw, 340px, max(180px, calc(100dvh - 460px))); }
+body[data-screen='play'] .board-wrap { --board-size: min(86vw, 340px, max(180px, calc(100dvh - 492px))); }
 body[data-screen='analysis'] .board-wrap { --board-size: min(80vw, 300px, max(170px, calc(100dvh - 390px))); }
 /* The editor (pockets + edit bar, ~130px) trades board height for its rows. */
 body[data-screen='analysis'].editing .board-wrap { --board-size: min(86vw, 380px, max(150px, calc(100dvh - 400px))); }
@@ -672,6 +680,25 @@ body.viewing .status-bar { opacity: 0.55; }
 .seek-row { display: flex; gap: 6px; margin-top: 8px; }
 .seek-row button { flex: 1; padding: 8px 0; font-size: 0.85rem; }
 
+/* In-game replay: step backwards/forwards through the game while it is still
+ * being played, with the Live button returning to the position on the clock. */
+.game-seek {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; align-items: center; gap: 6px;
+  margin-top: 6px;
+}
+.game-seek .seek-step { min-width: 42px; padding: 3px 0; font-size: 1.05rem; line-height: 1; }
+.game-seek input[type='range'] { width: 100%; min-width: 0; height: 26px; margin: 0; }
+.game-seek input[type='range']:disabled { opacity: 0.4; }
+.game-seek .seek-live {
+  padding: 4px 10px; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.03em;
+  border-radius: 999px;
+}
+.game-seek .seek-live:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.game-seek .seek-label {
+  font-family: var(--mono); font-size: 0.7rem; color: var(--ink-3);
+  min-width: 4.5ch; text-align: right;
+}
+
 /* clocks + captured material */
 .clock-bar { display: none; gap: 8px; justify-content: center; margin: 6px 0 0; }
 .clock-bar .clock {
@@ -681,6 +708,7 @@ body.viewing .status-bar { opacity: 0.55; }
 }
 .clock-bar .clock b { font-family: var(--sans); font-size: 0.62rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
 .clock-bar .clock.active { color: var(--ink); border-color: var(--accent); }
+.clock-bar .clock.low { color: var(--bad); border-color: var(--bad); }
 .captured-bar { display: none; justify-content: space-between; gap: 8px; margin: 4px 0 0; min-height: 20px; }
 .captured-bar .captured-side { display: flex; align-items: center; gap: 0; min-height: 20px; min-width: 0; }
 .captured-bar .captured-side b { font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2); margin: 0 4px; }
@@ -752,6 +780,27 @@ body.viewing .status-bar { opacity: 0.55; }
 .list-tile { display: flex; justify-content: space-between; gap: 10px; padding: var(--list-pad) 0; border-bottom: 1px solid var(--rule); font-size: 0.85rem; }
 .list-tile:last-child { border-bottom: none; }
 
+/* Recent games: every row opens that game's review, so it is a button. */
+.list-tile.game-row {
+  width: 100%; cursor: pointer;
+  background: none; border: none; border-bottom: 1px solid var(--rule);
+  border-radius: 0; text-align: left; color: inherit;
+  font: inherit; font-size: 0.85rem; padding: var(--list-pad) 0;
+}
+.list-tile.game-row:last-child { border-bottom: none; }
+.list-tile.game-row:active { background: var(--panel); color: var(--ink); }
+.game-row-main { min-width: 0; overflow-wrap: anywhere; }
+.res { margin-right: 6px; }
+.res-loss { color: var(--bad); }
+.stat-delta { font-family: var(--mono); font-weight: 700; }
+.stat-delta.up { color: var(--ok); }
+.stat-delta.down { color: var(--bad); }
+.link-more {
+  display: block; width: 100%; margin: 4px 0 0; padding: 6px 0;
+  background: none; border: none; border-top: 1px solid var(--rule);
+  color: var(--accent); font-size: 0.8rem; text-align: left;
+}
+
 /* ---------- stats: compact head + two-column grid, one viewport ---------- */
 .stats-head { border-bottom: 1px solid var(--rule-2); margin-bottom: 2px; }
 .stats-hero { padding-top: 2px; padding-bottom: 4px; border-bottom: none; }
@@ -773,6 +822,8 @@ body[data-screen='stats'] .moment-tile .chip { display: none; }
   body[data-screen='stats'] .spark { display: none; }
   body[data-screen='stats'] .stat-list,
   body[data-screen='stats'] .stat-openings { max-height: 66px; overflow-y: auto; }
+  /* An expanded game list is the thing being read, so give it real room. */
+  body[data-screen='stats'] .stat-list.expanded { max-height: 300px; }
   body[data-screen='puzzles'] .board-wrap { --board-size: min(80vw, 470px, max(160px, calc(100dvh - 420px))); }
   body[data-screen='puzzles'] .puzzle-hero { padding-top: 12px; }
   body[data-screen='analysis'] .board-wrap { --board-size: min(80vw, 300px, max(140px, calc(100dvh - 390px))); }
@@ -783,7 +834,7 @@ body[data-screen='stats'] .moment-tile .chip { display: none; }
   body[data-screen='analysis'].editing .pocket-piece,
   body[data-screen='analysis'].editing .pocket-clear { width: 34px; height: 34px; }
   /* Play: tighter board floor and chrome so even 320x568 fits. */
-  body[data-screen='play'] .board-wrap { --board-size: min(86vw, 340px, max(140px, calc(100dvh - 465px))); }
+  body[data-screen='play'] .board-wrap { --board-size: min(86vw, 340px, max(140px, calc(100dvh - 497px))); }
   body[data-screen='play'] button { padding: 5px 9px; }
   body[data-screen='play'] .btn-row { margin: 3px 0; }
   body[data-screen='play'] .move-list { max-height: 56px; }
@@ -816,6 +867,7 @@ body[data-screen='stats'] .moment-tile .chip { display: none; }
  * label keeps clear of the scrollbar it would otherwise sit under. */
 .replay-seek { margin: 6px 0 2px; }
 .replay-seek .seek-bar { padding-right: 6px; }
+.replay-seek .mistake-jump { margin-top: 6px; }
 .replay-seek .seek-label { color: var(--ink-2); }
 
 /* ---------- modal: plain sheet, printed ---------- */

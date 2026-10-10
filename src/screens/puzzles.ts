@@ -277,7 +277,7 @@ export async function mountPuzzles(container: HTMLElement, _app: App): Promise<v
     controls.replaceChildren();
     const actions = el('div', { class: 'btn-row' });
     if (!solutionShown) {
-      actions.append(el('button', { class: 'puzzle-solution-action', onclick: () => skip() }, 'Show solution'));
+      actions.append(el('button', { class: 'puzzle-solution-action', onclick: () => skip() }, 'Show solution · no credit'));
     }
     const hasPendingRecord = pendingRecord?.puzzle.id === current?.id;
     if (hasPendingRecord) {
@@ -321,6 +321,32 @@ export async function mountPuzzles(container: HTMLElement, _app: App): Promise<v
     solutionShown = true;
     solutionLine.textContent = `Solution: ${puzzleSolutionSan(current.fen, current.moves)}`;
     controls.querySelector('.puzzle-solution-action')?.remove();
+    playOutSolution(current);
+  }
+
+  /**
+   * Play the rest of the solution on the board. A line of SAN text tells you
+   * what the answer was; watching the pieces move shows you why it works.
+   */
+  function playOutSolution(puzzle: PuzzleItem): void {
+    const generation = puzzleGeneration;
+    const remaining = puzzle.moves.slice(1).slice(step);
+    let index = 0;
+    const tick = (): void => {
+      if (!container.isConnected || generation !== puzzleGeneration || current !== puzzle) return;
+      if (index >= remaining.length) {
+        setFeedback('Solution shown — no credit.', 'bad');
+        return;
+      }
+      const uci = remaining[index++];
+      const applied = game.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+      if (!applied) return;
+      board.setLastMove({ from: applied.from, to: applied.to });
+      board.render();
+      play(applied.captured ? 'capture' : 'move');
+      activeTimeout = setTimeout(tick, 620);
+    };
+    activeTimeout = setTimeout(tick, 400);
   }
 
   async function onMove(move: { from: string; to: string; promotion?: string }): Promise<void> {
@@ -395,11 +421,19 @@ export async function mountPuzzles(container: HTMLElement, _app: App): Promise<v
 
   async function completePuzzle(puzzle: PuzzleItem): Promise<void> {
     const score = puzzleScoreForMistakes(mistakeCount);
-    setFeedback(mistakeCount === 0 ? 'Solved!' : `Solved — ${Math.round(score * 100)}% credit.`, 'good');
+    setFeedback(mistakeCount === 0 ? 'Solved! Next puzzle coming up…' : `Solved — ${Math.round(score * 100)}% credit. Next puzzle coming up…`, 'good');
     board.setInteractive(false);
     revealThemes();
     await record(true, score, puzzle);
-    if (container.isConnected) renderPuzzleControls();
+    if (!container.isConnected) return;
+    renderPuzzleControls();
+    // A solved puzzle moves on by itself: the trainer should not need a tap
+    // between reps. Failed puzzles still wait for "Next puzzle".
+    const generation = puzzleGeneration;
+    activeTimeout = setTimeout(() => {
+      if (!container.isConnected || generation !== puzzleGeneration) return;
+      if (current === puzzle && solved) void nextPuzzle();
+    }, 2000);
   }
 
   function revealThemes(): void {

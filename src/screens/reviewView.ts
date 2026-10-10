@@ -98,9 +98,24 @@ function renderReview(rec: GameRecord, review: DeepReview, showCoords = true): v
   const navPrev = el('button', { class: 'nav-btn', 'aria-label': 'Previous move', onclick: () => showPly(shownPly - 1) }, '‹');
   const navNext = el('button', { class: 'nav-btn', 'aria-label': 'Next move', onclick: () => showPly(shownPly + 1) }, '›');
   const navLast = el('button', { class: 'nav-btn', 'aria-label': 'Last move', onclick: () => showPly(replayMoves.length) }, '»');
+  // Jump straight to the plays that actually cost something: the point of a
+  // review is the mistakes, not walking 40 plies to find them.
+  const flaggedPlies = review.plies
+    .filter((move) => move.cls === 'blunder' || move.cls === 'mistake' || move.cls === 'inaccuracy')
+    .map((move) => move.ply);
+  const stepToFlag = (direction: -1 | 1): void => {
+    const candidates = direction < 0 ? flaggedPlies.filter((ply) => ply < shownPly) : flaggedPlies.filter((ply) => ply > shownPly);
+    const next = direction < 0 ? candidates[candidates.length - 1] : candidates[0];
+    if (next !== undefined) showPly(next, true);
+  };
   const seekControls = el('div', { class: 'replay-seek' },
     el('div', { class: 'nav-row-controls' }, navFirst, navPrev, navNext, navLast),
-    el('div', { class: 'seek-bar' }, seekInput, seekLabel));
+    el('div', { class: 'seek-bar' }, seekInput, seekLabel),
+    flaggedPlies.length === 0
+      ? null
+      : el('div', { class: 'btn-row mistake-jump' },
+          el('button', { class: 'small', onclick: () => stepToFlag(-1) }, 'Previous mistake'),
+          el('button', { class: 'small', onclick: () => stepToFlag(1) }, `Next mistake (${flaggedPlies.length})`)));
   seekInput.addEventListener('input', () => showPly(Number(seekInput.value)));
 
   function showPly(ply: number, highlightBest = false): void {
@@ -112,7 +127,12 @@ function renderReview(rec: GameRecord, review: DeepReview, showCoords = true): v
     }
     while (shownPly < targetPly) {
       const uci = replayMoves[shownPly];
-      const move = replayGame.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+      let move: { san: string } | null = null;
+      try {
+        move = replayGame.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+      } catch {
+        break; // a stored move that no longer replays: show what does
+      }
       if (!move) break;
       shownPly++;
     }
@@ -144,6 +164,12 @@ function renderReview(rec: GameRecord, review: DeepReview, showCoords = true): v
 
     // Keep the scrubber and its step buttons in step with the board: taps on
     // the graph or the move list move the slider too.
+    const mistakeJump = seekControls.querySelector('.mistake-jump');
+    if (mistakeJump) {
+      const buttons = mistakeJump.querySelectorAll('button');
+      (buttons[0] as HTMLButtonElement).disabled = !flaggedPlies.some((ply) => ply < shownPly);
+      (buttons[1] as HTMLButtonElement).disabled = !flaggedPlies.some((ply) => ply > shownPly);
+    }
     const seek = seekState(review.plies, shownPly);
     seekInput.value = String(seek.value);
     seekInput.disabled = seek.max === 0;

@@ -1,6 +1,7 @@
 /** Home: rating overview, assessment entry, engine download. */
 import { getProfile, getSettings, countGames, getAttempts, updateSettings, getSavedAssessment, getLiveGame } from '../db';
 import { deserializeLiveGame } from '../liveGame';
+import { deserializeAssessment, type SavedAssessment } from '../assessment';
 import { engine } from '../engineClient';
 import { el, modal, toast } from '../ui';
 import { play } from '../sounds';
@@ -16,7 +17,14 @@ export async function mountHome(container: HTMLElement, app: App): Promise<void>
   if (!container.isConnected) return;
 
   const savedAssessment = await getSavedAssessment().catch(() => null);
-  const hasSaved = Boolean(savedAssessment) && !profile.assessed;
+  const saved = profile.assessed ? null : deserializeAssessment(savedAssessment as SavedAssessment | null);
+  const hasSaved = saved !== null;
+  /** Which tile is actually resumable, and how far that run got. */
+  const resumeLabel = (mode: 'probe' | 'ladder' | 'quick', fallback: string): string => {
+    if (saved?.mode !== mode) return fallback;
+    const done = saved.games.length;
+    return done === 0 ? 'resume · puzzles first' : `resume · ${done} game${done === 1 ? '' : 's'} done`;
+  };
   const savedGame = deserializeLiveGame(await getLiveGame().catch(() => null));
 
   const hero = el('div', { class: 'hero' },
@@ -51,9 +59,13 @@ export async function mountHome(container: HTMLElement, app: App): Promise<void>
           el('button', { class: 'primary', onclick: () => app.navigate('play', { rematch: true }) }, 'Play vs CPU'),
           el('button', { onclick: () => app.navigate('puzzles') }, 'Puzzles'))
       : el('div', {},
-          modeTile('Puzzles + games', hasSaved ? 'resume · saved progress' : 'recommended · ~15 min', () => startAssessment(app, 'probe')),
-          modeTile('Full ladder', hasSaved ? 'resume · saved progress' : '~10-14 games', () => startAssessment(app, 'ladder')),
-          modeTile('Quick scan', hasSaved ? 'resume · saved progress' : '6 games · rough', () => startAssessment(app, 'quick'))
+          modeTile('Puzzles + games', resumeLabel('probe', 'recommended · ~15 min'), () => startAssessment(app, 'probe')),
+          modeTile('Full ladder', resumeLabel('ladder', '~10-14 games'), () => startAssessment(app, 'ladder')),
+          modeTile('Quick scan', resumeLabel('quick', '6 games · rough'), () => startAssessment(app, 'quick')),
+          hasSaved
+            ? el('p', { class: 'tiny', style: 'margin:6px 0 0' },
+                'Only the saved run above resumes; opening another mode starts it fresh.')
+            : null
       )
   );
   const about = el('div', { class: 'section' },

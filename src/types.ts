@@ -86,6 +86,9 @@ export interface Settings {
   strictMode: boolean;
   engineTier: EngineTier;
   lastOpponentRating?: number;
+  /** Remembered New-game choices, so a rematch does not re-ask. */
+  lastTimeControl?: string;
+  lastColor?: 'random' | Color;
   pieceSet: PieceSet;
   boardTheme: BoardTheme;
   skin: Skin;

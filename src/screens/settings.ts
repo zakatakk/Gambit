@@ -8,6 +8,7 @@ import { ACCENTS, SKINS, applyAccent, applySkin, applyTheme } from '../theme';
 import { applyBoardTheme, applyPieceSet, BOARD_THEMES, PIECE_SETS } from '../pieces';
 import { setSoundsEnabled, play } from '../sounds';
 import { el, toast, switchControl, modal, confirmSheet } from '../ui';
+import { APP_VERSION } from '../version';
 import type { App } from '../app';
 import type { Settings, EngineTier } from '../types';
 
@@ -159,6 +160,7 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       mode === 'probe' ? 'Re-assess · puzzles + games' : mode === 'ladder' ? 'Re-assess · full ladder' : 'Re-assess · quick scan'));
   const resetButton = el('button', { class: 'danger', onclick: () => void doReset() }, 'Erase everything');
   const resetStyleButton = el('button', { class: 'small settings-reset-style', onclick: () => void resetStyle() }, 'Reset all styles');
+  const refreshButton = el('button', { onclick: () => void refreshApp() }, `Refresh app · build ${APP_VERSION}`);
 
   container.append(
     panel('Appearance', 'appearance',
@@ -188,6 +190,12 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       el('div', { class: 'btn-row' }, exportButton, importButton),
       importInput,
       el('div', { class: 'btn-row' }, resetButton)),
+    panel('App', 'app',
+      row('Build', el('span', { class: 'mono-tiny' }, `${APP_VERSION} UTC`)),
+      refreshButton,
+      el('p', { class: 'tiny', style: 'margin:6px 0 0' },
+        'Refresh re-fetches the app files (a stale cached build can hide changes) ' +
+        'and reloads. Games, rating, and the downloaded engine are kept.')),
     el('p', { class: 'tiny center', style: 'margin:10px 0' },
       'Glicko-2 rating · Stockfish engine (GPL) · Lichess puzzles (CC0)')
   );
@@ -253,6 +261,32 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
     } catch (error) {
       if (container.isConnected) toast(`Could not reset styles: ${(error as Error).message}`);
     }
+  }
+
+  /**
+   * Throw away the cached app shell and reload. A stale service-worker build
+   * once served an old bundle for days, which looked like a broken feature;
+   * this is the one-tap fix (and it keeps the 40MB engine download).
+   */
+  async function refreshApp(): Promise<void> {
+    toast('Refreshing app files…');
+    try {
+      const registrations = 'serviceWorker' in navigator
+        ? await navigator.serviceWorker.getRegistrations()
+        : [];
+      await Promise.all(registrations.map((reg) => reg.update().catch(() => undefined)));
+    } catch {
+      /* no service worker: nothing to update */
+    }
+    try {
+      const keys = await caches.keys();
+      await Promise.all(
+        keys.filter((key) => !key.includes('engine-assets')).map((key) => caches.delete(key).catch(() => false))
+      );
+    } catch {
+      /* cache API unavailable */
+    }
+    location.reload();
   }
 
   async function doExport(): Promise<void> {

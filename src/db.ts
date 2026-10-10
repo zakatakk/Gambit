@@ -1,6 +1,6 @@
 /** IndexedDB persistence: profile, settings, games, rating history, and puzzle attempts. */
 import type { GameRecord, Profile, PuzzleAttempt, RatingHistoryPoint, Settings } from './types';
-import { DEFAULT_SETTINGS } from './types';
+import { DEFAULT_SETTINGS, TIME_CONTROLS } from './types';
 
 const DB_NAME = 'gambit';
 const DB_VERSION = 3;
@@ -353,6 +353,9 @@ function isSettings(value: unknown): value is Partial<Settings> {
   if (value.accent !== undefined && !['oxblood', 'forest', 'royal', 'aubergine'].includes(String(value.accent))) return false;
   if (value.autoQueen !== undefined && typeof value.autoQueen !== 'boolean') return false;
   if (value.showCoords !== undefined && typeof value.showCoords !== 'boolean') return false;
+  if (value.lastTimeControl !== undefined &&
+      !TIME_CONTROLS.some((entry) => entry.id === value.lastTimeControl)) return false;
+  if (value.lastColor !== undefined && !['random', 'w', 'b'].includes(String(value.lastColor))) return false;
   return value.lastOpponentRating === undefined || finiteNumber(value.lastOpponentRating);
 }
 

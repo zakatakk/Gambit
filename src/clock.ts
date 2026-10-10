@@ -58,6 +58,28 @@ export class ChessClock {
   flagged(): boolean {
     return this.timed && this.remainingMs(this.turn) <= 0;
   }
+
+  /**
+   * Freeze both clocks, banking the time the side to move has already spent.
+   * Used while the player browses earlier positions: looking back at a game
+   * must not cost them the game on time.
+   */
+  pause(): void {
+    if (!this.timed || this.stamp === null) return;
+    this.remaining[this.turn] = Math.max(0, this.remaining[this.turn] - (this.nowFn() - this.stamp));
+    this.stamp = null;
+  }
+
+  /** Start the side to move ticking again after pause(). */
+  resume(): void {
+    if (!this.timed || this.stamp !== null) return;
+    this.stamp = this.nowFn();
+  }
+
+  /** True while the clock is frozen (between pause() and resume()). */
+  get paused(): boolean {
+    return this.timed && this.stamp === null;
+  }
 }
 
 /** m:ss display; tenths under 20s so flag races are readable. */
