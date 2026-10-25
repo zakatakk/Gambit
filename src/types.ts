@@ -1,6 +1,7 @@
 /** Shared app types. */
 
 export type EngineTier = 'lite' | 'full';
+export type OpponentEngine = 'maia' | 'stockfish';
 
 export type GameType = 'cpu' | 'assessment' | 'passplay';
 export type GameResult = 'win' | 'loss' | 'draw' | 'abandoned';
@@ -50,6 +51,8 @@ export interface GameRecord {
   startFen: string;
   opponentRating: number;
   opponentTier: EngineTier;
+  /** Which engine played the CPU side; absent on older records = Stockfish. */
+  opponentEngine?: OpponentEngine;
   rated: boolean;
   ratingBefore?: number;
   ratingAfter?: number;
@@ -85,6 +88,8 @@ export interface Settings {
   sounds: boolean;
   strictMode: boolean;
   engineTier: EngineTier;
+  /** Human-like Maia-3 is the default opponent; Stockfish is fallback/analysis. */
+  opponentEngine: OpponentEngine;
   lastOpponentRating?: number;
   /** Remembered New-game choices, so a rematch does not re-ask. */
   lastTimeControl?: string;
@@ -102,6 +107,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sounds: true,
   strictMode: false,
   engineTier: 'lite',
+  opponentEngine: 'maia',
   pieceSet: 'cburnett',
   boardTheme: 'auto',
   skin: 'classic',

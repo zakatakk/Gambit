@@ -172,7 +172,9 @@ export async function mountStats(container: HTMLElement, _app: App): Promise<voi
   function gameListLabel(g: GameRecord): string {
     if (g.type === 'passplay') return ' pass-and-play';
     if (g.type === 'assessment') return ` vs ${Math.round(g.opponentRating)} · assessment`;
-    return ` vs CPU ${Math.round(g.opponentRating)}`;
+    return g.opponentEngine === 'maia'
+      ? ` vs Maia ${Math.round(g.opponentRating)}`
+      : ` vs CPU ${Math.round(g.opponentRating)}`;
   }
 
   function reviewTile(g: GameRecord, analysed: boolean): HTMLElement {

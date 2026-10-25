@@ -5,7 +5,7 @@ An offline-first chess PWA for iPhone: a **rating you can trust**, CPU games at 
 ## Features
 
 - **Rating assessment** — an 8-puzzle probe seeds a Glicko-2 prior, then an adaptive staircase vs Stockfish levels (Lichess-calibrated anchors: L1≈800 … L8≈2800) converges your rating-deviation to ±80 or better. Usually 8–14 short games.
-- **Play vs CPU at your rating** — the engine strength maps continuously to your rating (Skill Level + UCI_LimitStrength + human-like move randomization). Adjust in Settings. Casual (unrated) until you're assessed, then rated games adjust your rating.
+- **Play vs CPU at your rating** — Maia-3 is the default opponent: a human-move model that plays the way people around your rating actually play. Stockfish handles analysis, the assessment ladder, and opponents above 2600. Adjust the opponent and rating in Settings. Casual (unrated) until you're assessed, then rated games adjust your rating.
 - **Puzzles fit for your rating** — 20,000 curated puzzles from the Lichess database (CC0), filtered for quality (popularity ≥ 70, RD ≤ 100, 2–8 plies), selected in a ±rating window that widens if needed. Strict Lichess-style solving: three tries per puzzle, misses reduce the credit, and every attempt is rated.
 - **One unified rating** — games and puzzles both feed a single Glicko-2 rating (τ=0.5, verified against Glickman's worked example in the test suite).
 - **Post-game review** — engine scan flags blunders/mistakes/inaccuracies with best-move suggestions and an accuracy estimate.
@@ -16,7 +16,7 @@ An offline-first chess PWA for iPhone: a **rating you can trust**, CPU games at 
 
 ```bash
 npm install
-npm run setup        # copies engine files + generates icons
+npm run setup        # copies Maia-3 + Stockfish + generates icons
 npm run puzzles      # one-time: builds the 20k puzzle bundle (~50MB download)
 npm run dev          # dev server
 npm run build        # production build → dist/
@@ -49,13 +49,16 @@ Open `http://<your-computer-ip>:5173` in iPhone Safari (same Wi-Fi). Note: the S
 
 ## Notes
 
-- **Engine**: Stockfish 16 NNUE (~40MB one-time download, off by default) and a lite build (~2MB). Both are classic-script WASM workers — no COOP/COEP needed. GPL license applies to the engine binaries.
+- **Maia-3 (default opponent)**: the 5M ONNX model (~22MB) plus the ONNX Runtime WASM (~14MB) downloads on the first CPU game and is cached for offline play. Maia's Elo input is a human-style target rather than a calibrated strength, so ratings are approximate. Maia-3 is AGPL-3.0; the `maia3-js` wrapper is MIT.
+- **Stockfish**: 16 NNUE (~40MB one-time download, off by default) plus a lite build (~2MB) for fallback and analysis. Both are classic-script WASM workers — no COOP/COEP needed. GPL license applies to the engine binaries.
+- **Maia fallback**: if the model is unavailable (offline before its first download, or an unsupported browser), a CPU game falls back to the cached Stockfish lite engine for that session.
 - **Assessment re-runs**: Settings → Rating → Re-assess options.
 - **Rating floor/ceiling**: opponent slider 600–2900.
 - **Backup**: Settings → Export backup before clearing browser storage.
 
 ## Attribution
 
+- Maia-3 (AGPL-3.0) by the [CSSLab](https://github.com/CSSLab/maia3), with browser inference from [`maia3-js`](https://www.npmjs.com/package/maia3-js) (MIT) and [ONNX Runtime Web](https://onnxruntime.ai/).
 - Stockfish (GPL-3.0) via [nmrugg/stockfish.js](https://github.com/nmrugg/stockfish.js) and the npm `stockfish` package.
 - Puzzles from the [Lichess puzzle database](https://database.lichess.org) (CC0).
 - Pieces: **cburnett** set (via the Lichess project) — for personal use.

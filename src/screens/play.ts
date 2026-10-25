@@ -2,7 +2,9 @@
 import { Chess } from 'chess.js';
 import { Board } from '../board';
 import { engine } from '../engineClient';
+import { maia, MAIA_MAX_ELO } from '../maiaClient';
 import { ratingToStrength, ASSESSMENT_LEVELS } from '../engineStrength';
+import type { ChessJsMove } from '../engineProtocol';
 import { applyGameResult, setProfileRating } from '../ratingOps';
 import { ratePeriod } from '../glicko2';
 import { getProfile, getSettings, updateSettings, addGame, updateGame, updateProfile, getSavedAssessment, saveSavedAssessment, getLiveGame, saveLiveGame, clearLiveGame, getReview } from '../db';
@@ -14,7 +16,7 @@ import { serializeLiveGame, deserializeLiveGame, type SavedLiveGame } from '../l
 import { play } from '../sounds';
 import { el, modal, toast, confirmSheet } from '../ui';
 import type { App } from '../app';
-import type { Color, EngineTier, GameResult, GameRecord, PuzzleItem, Settings } from '../types';
+import type { Color, EngineTier, GameRecord, GameResult, OpponentEngine, PuzzleItem, Settings } from '../types';
 import { TIME_CONTROLS, UNTIMED, type TimeControl } from '../types';
 import {
   newAssessment,
@@ -62,7 +64,12 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   applyPieceSet(settings.pieceSet);
   applyBoardTheme(settings.boardTheme);
   let activeEngineTier: EngineTier = settings.engineTier === 'full' ? 'full' : 'lite';
-  let assessed = (await getProfile()).assessed;
+  let activeOpponentEngine: OpponentEngine = settings.opponentEngine === 'stockfish' ? 'stockfish' : 'maia';
+  let maiaMode = false;
+  let playerRating = 1500;
+  const initialProfile = await getProfile();
+  let assessed = initialProfile.assessed;
+  playerRating = Math.round(initialProfile.rating);
   if (!container.isConnected) return;
   const game = new Chess();
 
@@ -104,6 +111,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     probeTimeout = undefined;
     stopClockTimer();
     engine.cancelSearch();
+    maia.cancelPending();
     document.querySelectorAll('.modal-back').forEach((modal) => modal.remove());
   };
   container.addEventListener('screen-dispose', dispose, { once: true });
@@ -230,7 +238,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
 
   // ---------- DOM ----------
   const boardHost = el('div', { class: 'board-wrap' });
-  const opponentLabel = el('span', {}, 'CPU');
+  const opponentLabel = el('span', {}, activeOpponentEngine === 'maia' ? 'Maia' : 'CPU');
   const modeLabel = el('span', { class: 'sub' });
   const topBar = el('div', { class: 'game-top' },
     el('span', { class: 'vs' }, 'You vs ', opponentLabel),
@@ -361,7 +369,8 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       movesUci: game.history({ verbose: true }).map((h) => h.from + h.to + (h.promotion ?? '')).join(' '),
       playerColor,
       oppRating,
-      oppTier: engine.tier ?? oppTier,
+      oppTier: maiaMode ? 'lite' : (engine.tier ?? oppTier),
+      oppEngine: gameType === 'passplay' ? undefined : maiaMode ? 'maia' : 'stockfish',
       rated: ratedGame,
       timeControl,
       clocksMs: clock ? { w: clock.remainingMs('w'), b: clock.remainingMs('b') } : { w: 0, b: 0 },
@@ -373,13 +382,19 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   /** Rebuild an interrupted game from its snapshot (Home or a gameLoad param). */
   function resumeSavedGame(saved: SavedLiveGame): void {
     const generation = ++gameGeneration;
+    thinking = false;
+    engine.cancelSearch();
+    maia.cancelPending();
     gameType = saved.type;
     ratedGame = saved.rated;
     timeControl = saved.timeControl;
     playerColor = saved.playerColor;
     oppRating = saved.oppRating;
     oppTier = saved.oppTier;
-    oppName = saved.type === 'passplay' ? 'Pass & play' : `CPU ${saved.oppRating}`;
+    maiaMode = saved.type === 'cpu' && saved.oppEngine === 'maia' && saved.oppRating <= MAIA_MAX_ELO;
+    oppName = saved.type === 'passplay'
+      ? 'Pass & play'
+      : maiaMode ? `Maia ${saved.oppRating}` : `CPU ${saved.oppRating}`;
     opponentLabel.textContent = saved.type === 'passplay' ? 'White vs Black' : oppName;
     baseModeLabel = saved.type === 'passplay'
       ? ' · pass-and-play · resumed'
@@ -409,15 +424,15 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     controlsInGame(saved.type === 'cpu' && !settings.strictMode);
     renderCaptured();
     renderClocks();
-    setStatus('Resuming — loading engine…');
+    setStatus(maiaMode ? 'Resuming — loading Maia-3…' : 'Resuming — loading engine…');
     void (async () => {
       try {
-        await ensureEngine((s) => {
+        await ensureOpponent((s) => {
           if (generation === gameGeneration && container.isConnected) setStatus(s);
         });
       } catch (error) {
         if (generation === gameGeneration && container.isConnected) {
-          setStatus(`Engine failed to load: ${(error as Error).message}`, 'lose');
+          setStatus(`Opponent failed to load: ${(error as Error).message}`, 'lose');
           showEngineRetry();
         }
         return;
@@ -456,7 +471,9 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
               delete controls.dataset.liveResumable;
               resumeSavedGame(saved);
             } },
-              saved.type === 'passplay' ? 'Resume pass-and-play' : `Resume vs CPU ${saved.oppRating}`),
+              saved.type === 'passplay'
+                ? 'Resume pass-and-play'
+                : `Resume vs ${saved.oppEngine === 'maia' ? 'Maia' : 'CPU'} ${saved.oppRating}`),
             el('button', { onclick: () => {
               delete controls.dataset.liveResumable;
               void clearLiveGame().catch(() => {});
@@ -523,12 +540,20 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       type: 'range', min: '600', max: '2900', step: '25', 'aria-label': 'Opponent rating',
     }) as HTMLInputElement;
     strengthSlider.value = strengthValue.textContent ?? '';
+    const engineNote = el('p', { class: 'tiny', style: 'margin:2px 0 0' }, '');
+    const describeOpponent = (value: number): string => {
+      if (activeOpponentEngine !== 'maia') return 'Stockfish · computer-like';
+      if (value > MAIA_MAX_ELO) return 'Stockfish · above Maia-3’s 2600 range';
+      return 'Maia-3 · human-like · ~22MB first use';
+    };
     const setStrength = (value: number): void => {
       const next = clampStrength(value);
       strengthSlider.value = String(next);
       strengthValue.textContent = String(next);
       strengthNote.textContent = strengthHint(next, base);
+      engineNote.textContent = describeOpponent(next);
     };
+    setStrength(Number(strengthSlider.value));
     strengthSlider.addEventListener('input', () => setStrength(Number(strengthSlider.value)));
 
     const closeSheet = modal(
@@ -538,6 +563,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       el('div', { class: 'row' }, el('span', {}, 'Opponent'), strengthValue),
       strengthSlider,
       strengthNote,
+      engineNote,
       el('div', { class: 'btn-row strength-presets' },
         el('button', { class: 'small', onclick: () => setStrength(base) }, 'My level'),
         el('button', { class: 'small', onclick: () => setStrength(base - 400) }, '−400'),
@@ -573,6 +599,7 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     timeControl = tc;
     oppRating = 0;
     oppTier = 'lite';
+    maiaMode = false;
     oppName = 'Pass & play';
     playerColor = 'w';
     mode = 'game';
@@ -902,6 +929,36 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     }
   }
 
+  async function ensureMaia(onStatus: (s: string) => void): Promise<void> {
+    await maia.init((phase, fraction) => {
+      if (phase === 'download') onStatus(`Downloading Maia-3 ${Math.round(fraction * 100)}%`);
+      else if (phase === 'booting') onStatus('Booting Maia-3…');
+      else onStatus('Maia-3 ready');
+    });
+  }
+
+  /** Load Maia for a human-like CPU game, or Stockfish for the ladder. */
+  async function ensureOpponent(onStatus: (s: string) => void): Promise<void> {
+    if (!maiaMode) {
+      await ensureEngine(onStatus);
+      return;
+    }
+    try {
+      await ensureMaia(onStatus);
+      return;
+    } catch (error) {
+      console.warn('[maia] unavailable, falling back to Stockfish', error);
+      maiaMode = false;
+      // The lite build is precached, so an offline/phone failure recovers
+      // immediately instead of starting a 40MB full-engine download.
+      if (!engine.tier) activeEngineTier = 'lite';
+      oppName = `CPU ${oppRating}`;
+      opponentLabel.textContent = oppName;
+      toast('Maia-3 unavailable — using Stockfish this game.');
+    }
+    await ensureEngine(onStatus);
+  }
+
   /** A dead engine worker used to end the session: the game sat there with no
    * way back. One tap now rebuilds the worker and resumes whatever is pending. */
   function showEngineRetry(): void {
@@ -914,9 +971,9 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
 
   async function retryEngine(): Promise<void> {
     controls.querySelector('.engine-retry')?.parentElement?.remove();
-    setStatus('Restarting the engine…');
+    setStatus('Restarting the opponent…');
     try {
-      await ensureEngine((s) => { if (container.isConnected) setStatus(s); });
+      await ensureOpponent((s) => { if (container.isConnected) setStatus(s); });
     } catch (error) {
       if (container.isConnected) {
         setStatus(`Engine still failing: ${(error as Error).message}`, 'lose');
@@ -938,6 +995,9 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
   // ---------- game flow ----------
   async function startGame(opts?: { color?: Color; rating?: number; ladder?: boolean; timeControl?: TimeControl }): Promise<void> {
     const generation = ++gameGeneration;
+    thinking = false;
+    engine.cancelSearch();
+    maia.cancelPending();
     let p;
     try {
       p = await getProfile();
@@ -949,11 +1009,15 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     }
     if (generation !== gameGeneration || !container.isConnected) return;
     oppRating = Math.round(opts?.rating ?? settings.lastOpponentRating ?? p.rating);
+    playerRating = Math.round(p.rating);
+    // The assessment ladder must stay on calibrated Stockfish anchors; Maia is
+    // only for normal CPU games, and only inside its 600–2600 training band.
+    maiaMode = !opts?.ladder && activeOpponentEngine === 'maia' && oppRating <= MAIA_MAX_ELO;
     oppTier = activeEngineTier;
     playerColor = opts?.color ?? (Math.random() < 0.5 ? 'w' : 'b');
     oppName = opts?.ladder
       ? `Stockfish ${ASSESSMENT_LEVELS[lastLevel].label} (~${ASSESSMENT_LEVELS[lastLevel].rating})`
-      : `CPU ${oppRating}`;
+      : maiaMode ? `Maia ${oppRating}` : `CPU ${oppRating}`;
     opponentLabel.textContent = oppName;
     gameType = opts?.ladder ? 'none' : 'cpu';
     ratedGame = !opts?.ladder && assessed;
@@ -977,14 +1041,14 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     controlsInGame(!opts?.ladder && !settings.strictMode);
     renderCaptured();
     renderClocks();
-    setStatus('Loading engine…');
+    setStatus(maiaMode ? 'Loading Maia-3…' : 'Loading engine…');
     try {
-      await ensureEngine((s) => {
+      await ensureOpponent((s) => {
         if (generation === gameGeneration && container.isConnected) setStatus(s);
       });
     } catch (e) {
       if (generation === gameGeneration && container.isConnected) {
-        setStatus(`Engine failed to load: ${(e as Error).message}`, 'lose');
+        setStatus(`Opponent failed to load: ${(e as Error).message}`, 'lose');
         showEngineRetry();
       }
       return;
@@ -998,6 +1062,27 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     persistLiveGame();
   }
 
+  async function chooseOpponentMove(fen: string, generation: number): Promise<ChessJsMove> {
+    if (maiaMode) {
+      try {
+        const priorMoves = game.history({ verbose: true })
+          .map((move) => move.from + move.to + (move.promotion ?? ''));
+        return await maia.play(fen, priorMoves, oppRating, playerRating);
+      } catch (error) {
+        // A cancelled prediction belongs to a game that no longer exists.
+        if (generation !== gameGeneration || !container.isConnected) throw error;
+        console.warn('[maia] prediction failed, falling back to Stockfish', error);
+        maiaMode = false;
+        if (!engine.tier) activeEngineTier = 'lite';
+        oppName = `CPU ${oppRating}`;
+        opponentLabel.textContent = oppName;
+        toast('Maia-3 failed — switching to Stockfish this game.');
+        await ensureEngine((s) => { if (container.isConnected) setStatus(s); });
+      }
+    }
+    return engine.play(fen, ratingToStrength(oppRating, activeEngineTier));
+  }
+
   async function engineMove(): Promise<void> {
     // Engine plays in casual/rated CPU games AND assessment ladder games (mode ladder).
     if (thinking || !container.isConnected || (mode !== 'ladder' && gameType !== 'cpu') || (mode !== 'game' && mode !== 'ladder') || game.isGameOver()) return;
@@ -1006,10 +1091,9 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
     thinking = true;
     board.setInteractive(false);
     setStatus(`${oppName} is thinking…`);
-    const strength = ratingToStrength(oppRating, activeEngineTier);
+    const fen = game.fen();
     try {
-      const fen = game.fen();
-      const mv = await engine.play(fen, strength);
+      const mv = await chooseOpponentMove(fen, generation);
       if (generation !== gameGeneration || !container.isConnected) return;
       if (game.fen() !== fen) throw new Error('Position changed while the engine was thinking');
       thinking = false;
@@ -1170,7 +1254,8 @@ export async function mountPlay(container: HTMLElement, app: App, params: PlayPa
       movesUci,
       startFen: START_FEN,
       opponentRating: oppRating,
-      opponentTier: wasPassPlay ? 'lite' : (engine.tier ?? activeEngineTier),
+      opponentTier: wasPassPlay || maiaMode ? 'lite' : (engine.tier ?? activeEngineTier),
+      opponentEngine: wasPassPlay ? undefined : maiaMode ? 'maia' : 'stockfish',
       rated: assessed && !wasLadder && !wasPassPlay,
       termination: r.termination,
     };

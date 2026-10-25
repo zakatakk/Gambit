@@ -348,6 +348,7 @@ function isSettings(value: unknown): value is Partial<Settings> {
   if (value.sounds !== undefined && typeof value.sounds !== 'boolean') return false;
   if (value.strictMode !== undefined && typeof value.strictMode !== 'boolean') return false;
   if (value.engineTier !== undefined && !['lite', 'full'].includes(String(value.engineTier))) return false;
+  if (value.opponentEngine !== undefined && !['maia', 'stockfish'].includes(String(value.opponentEngine))) return false;
   if (value.pieceSet !== undefined && !['cburnett', 'staunty', 'merida'].includes(String(value.pieceSet))) return false;
   if (value.boardTheme !== undefined && !['auto', 'walnut', 'marine', 'slate'].includes(String(value.boardTheme))) return false;
   if (value.accent !== undefined && !['oxblood', 'forest', 'royal', 'aubergine'].includes(String(value.accent))) return false;
@@ -365,6 +366,7 @@ function isGame(value: unknown): value is GameRecord {
     ['win', 'loss', 'draw', 'abandoned'].includes(String(value.result)) &&
     typeof value.movesUci === 'string' && typeof value.startFen === 'string' &&
     finiteNumber(value.opponentRating) && ['lite', 'full'].includes(String(value.opponentTier)) &&
+    (value.opponentEngine === undefined || ['maia', 'stockfish'].includes(String(value.opponentEngine))) &&
     typeof value.rated === 'boolean' && typeof value.termination === 'string' &&
     (value.id === undefined || finiteNumber(value.id)) &&
     (value.ratingBefore === undefined || finiteNumber(value.ratingBefore)) &&

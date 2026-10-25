@@ -10,7 +10,7 @@ import { setSoundsEnabled, play } from '../sounds';
 import { el, toast, switchControl, modal, confirmSheet } from '../ui';
 import { APP_VERSION } from '../version';
 import type { App } from '../app';
-import type { Settings, EngineTier } from '../types';
+import type { Settings, EngineTier, OpponentEngine } from '../types';
 
 const PIECE_SET_LABELS: Record<string, string> = {
   cburnett: 'Classic',
@@ -96,6 +96,26 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
     })();
   });
 
+  const opponentSelect = el('select', {},
+    el('option', { value: 'maia' }, 'Maia-3 · human-like'),
+    el('option', { value: 'stockfish' }, 'Stockfish')) as HTMLSelectElement;
+  opponentSelect.value = settings.opponentEngine;
+  opponentSelect.addEventListener('change', () => {
+    void (async () => {
+      const selected = opponentSelect.value as OpponentEngine;
+      try {
+        await updateSettings({ opponentEngine: selected });
+        if (!container.isConnected) return;
+        toast(selected === 'maia'
+          ? 'Maia-3 selected — ~22MB download on the first game.'
+          : 'Stockfish selected.');
+      } catch (error) {
+        if (container.isConnected) toast(`Could not save engine preference: ${(error as Error).message}`);
+        if (container.isConnected) opponentSelect.value = settings.opponentEngine;
+      }
+    })();
+  });
+
   const styleSelect = el('select', {},
     ...SKINS.map((skin) => el('option', { value: skin.id }, skin.label))) as HTMLSelectElement;
   styleSelect.value = settings.skin;
@@ -174,9 +194,13 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       preview.el.parentElement as HTMLElement,
       resetStyleButton),
     panel('Difficulty', 'difficulty',
+      row('Opponent', opponentSelect),
+      el('p', { class: 'tiny', style: 'margin:0 0 8px' },
+        'Maia-3 plays human-like moves; its first use downloads about 22MB. ' +
+        'Stockfish handles analysis and opponents above 2600.'),
       row('Opponent rating', opponentLabel),
       opponentSlider,
-      row('Engine', tierSelect)),
+      row('Stockfish build', tierSelect)),
     panel('Gameplay', 'gameplay',
       row('Strict mode', strictSwitch),
       row('Always promote to queen', autoQueenSwitch),
@@ -197,7 +221,7 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
         'Refresh re-fetches the app files (a stale cached build can hide changes) ' +
         'and reloads. Games, rating, and the downloaded engine are kept.')),
     el('p', { class: 'tiny center', style: 'margin:10px 0' },
-      'Glicko-2 rating · Stockfish engine (GPL) · Lichess puzzles (CC0)')
+      'Glicko-2 rating · Maia-3 (AGPL) / Stockfish (GPL) · Lichess puzzles (CC0)')
   );
 
   /** Collapsible section: keeps every settings group on one screen.
@@ -223,7 +247,7 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
     return el('div', { class: 'row' }, el('span', {}, label), control);
   }
 
-  async function updateSetting<K extends 'theme' | 'sounds' | 'strictMode' | 'pieceSet' | 'boardTheme' | 'skin' | 'accent' | 'autoQueen' | 'showCoords'>(
+  async function updateSetting<K extends 'theme' | 'sounds' | 'strictMode' | 'pieceSet' | 'boardTheme' | 'skin' | 'accent' | 'autoQueen' | 'showCoords' | 'opponentEngine'>(
     key: K,
     value: Settings[K],
     apply?: (value: Settings[K]) => void
@@ -324,6 +348,8 @@ export async function mountSettings(container: HTMLElement, app: App): Promise<v
       accentSelect.value = importedSettings.accent;
       pieceSelect.value = importedSettings.pieceSet;
       boardSelect.value = importedSettings.boardTheme;
+      opponentSelect.value = importedSettings.opponentEngine;
+      tierSelect.value = importedSettings.engineTier;
       preview.render();
       toast('Data imported.');
       await app.refreshRating();

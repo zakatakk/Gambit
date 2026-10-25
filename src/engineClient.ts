@@ -37,8 +37,9 @@ function isHtmlResponse(res: Response): boolean {
 export async function fetchProgress(
   url: string,
   onFrac: (f: number) => void,
-  expectedBytes?: number
-): Promise<void> {
+  expectedBytes?: number,
+  collectBytes = false
+): Promise<Uint8Array | undefined> {
   let cache: Cache | null = null;
   try {
     if ('caches' in globalThis) cache = await caches.open(ENGINE_ASSET_CACHE);
@@ -49,8 +50,14 @@ export async function fetchProgress(
   if (cache) {
     const cached = await cache.match(url);
     if (cached && !isHtmlResponse(cached)) {
-      onFrac(1);
-      return;
+      const cachedBytes = Number(cached.headers.get('content-length') || 0);
+      // A partial/old model cache is just as bad as an HTML fallback page.
+      if (expectedBytes && cachedBytes > 0 && cachedBytes !== expectedBytes) {
+        await cache.delete(url);
+      } else {
+        onFrac(1);
+        return collectBytes ? new Uint8Array(await cached.arrayBuffer()) : undefined;
+      }
     }
     // A fallback page cached by an older build is never a valid engine file.
     if (cached) await cache.delete(url);
@@ -70,14 +77,16 @@ export async function fetchProgress(
   if (!reader) {
     await cacheWrite;
     onFrac(1);
-    return;
+    return collectBytes ? new Uint8Array(await res.arrayBuffer()) : undefined;
   }
 
   let received = 0;
+  const chunks: Uint8Array[] = [];
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     received += value.length;
+    if (collectBytes) chunks.push(value);
     if (total > 0) onFrac(Math.min(1, received / total));
   }
   await cacheWrite;
@@ -91,6 +100,14 @@ export async function fetchProgress(
     throw new Error(`Engine file ${url} is ${received} bytes, expected ${expectedBytes}`);
   }
   onFrac(1);
+  if (!collectBytes) return undefined;
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return bytes;
 }
 
 async function downloadEngineAssets(

@@ -1,6 +1,6 @@
 /* Gambit service worker: offline shell + asset caching. */
 const BASE = new URL(self.registration.scope).pathname;
-const CACHE_VERSION = 'v5';
+const CACHE_VERSION = 'v6';
 const SCOPE_ID = BASE.replace(/^\/+|\/+$/g, '').replace(/[^\w-]/g, '_') || 'root';
 const CACHE_PREFIX = `gambit-${SCOPE_ID}-`;
 const CACHE = CACHE_PREFIX + CACHE_VERSION;
@@ -22,6 +22,7 @@ const PRECACHE = [
 ];
 const CACHE_FIRST_PREFIXES = ['engine/', 'data/', 'icons/', 'pieces/']
   .map((path) => new URL(path, self.registration.scope).pathname);
+const MAIA_MODEL = new URL(`${BASE}engine/maia3_5m.onnx`, self.registration.scope).pathname;
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -56,6 +57,10 @@ function cacheResponse(event, response) {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.origin !== self.location.origin) return;
+
+  // Maia's client streams/caches the 22MB model itself (with progress and
+  // validation). Letting the shell cache duplicate it would double storage.
+  if (url.pathname === MAIA_MODEL) return;
 
   if (CACHE_FIRST_PREFIXES.some((prefix) => url.pathname.startsWith(prefix))) {
     event.respondWith((async () => {

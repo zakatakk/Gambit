@@ -21,6 +21,12 @@ describe('live game snapshots', () => {
     expect(deserializeLiveGame(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
   });
 
+  it('preserves which engine was playing', () => {
+    const saved = deserializeLiveGame({ ...SAMPLE, oppEngine: 'maia' });
+    expect(saved?.oppEngine).toBe('maia');
+    expect(deserializeLiveGame({ ...SAMPLE, oppEngine: 'unknown' })).toBeNull();
+  });
+
   it('rejects corrupted or foreign payloads', () => {
     expect(deserializeLiveGame(null)).toBeNull();
     expect(deserializeLiveGame('x')).toBeNull();

@@ -69,10 +69,17 @@ export async function mountHome(container: HTMLElement, app: App): Promise<void>
       )
   );
   const about = el('div', { class: 'section' },
-    el('p', { class: 'kicker' }, 'Engine'),
+    el('p', { class: 'kicker' }, 'Opponent & engine'),
+    el('div', { class: 'row' },
+      el('span', { class: 'muted' }, 'Opponent'),
+      el('b', { style: 'font-size:0.9rem' }, settings.opponentEngine === 'maia' ? 'Maia-3 · human-like' : 'Stockfish · computer-like')),
     el('div', { class: 'row' },
       el('span', { class: 'muted' }, 'Stockfish build'),
       el('b', { style: 'font-size:0.9rem' }, settings.engineTier === 'full' ? 'Full NNUE · strongest' : 'Lite · ~2350 ceiling')),
+    settings.opponentEngine === 'maia'
+      ? el('p', { class: 'tiny', style: 'margin:6px 0 0' },
+          'Maia-3 downloads ~22MB on first use; Stockfish is the fallback and analysis engine.')
+      : null,
     settings.engineTier === 'lite'
       ? el('button', { class: 'small', onclick: () => void upgradeEngine(app, container) }, 'Get full engine · 40MB')
       : null

@@ -4,7 +4,7 @@
  * finishes or is abandoned. Version field lets future formats migrate.
  */
 
-import type { Color, EngineTier, GameType, TimeControl } from './types';
+import type { Color, EngineTier, GameType, OpponentEngine, TimeControl } from './types';
 
 export interface SavedLiveGame {
   version: 1;
@@ -16,6 +16,8 @@ export interface SavedLiveGame {
   playerColor: Color;
   oppRating: number;
   oppTier: EngineTier;
+  /** Which engine was playing the CPU side; absent on old snapshots. */
+  oppEngine?: OpponentEngine;
   rated: boolean;
   timeControl: TimeControl;
   /** Remaining clock time per side in ms at save point (0/0 when untimed). */
@@ -41,6 +43,7 @@ export function deserializeLiveGame(raw: unknown): SavedLiveGame | null {
   if (typeof s.movesUci !== 'string') return null;
   if (!['w', 'b'].includes(String(s.playerColor))) return null;
   if (!isFiniteNumber(s.oppRating) || !['lite', 'full'].includes(String(s.oppTier))) return null;
+  if (s.oppEngine !== undefined && !['maia', 'stockfish'].includes(String(s.oppEngine))) return null;
   if (typeof s.rated !== 'boolean') return null;
   const tc = s.timeControl as Record<string, unknown> | undefined;
   if (!tc || !isFiniteNumber(tc.base) || !isFiniteNumber(tc.inc) || tc.base < 0 || tc.inc < 0) return null;
@@ -55,6 +58,7 @@ export function deserializeLiveGame(raw: unknown): SavedLiveGame | null {
     playerColor: s.playerColor as Color,
     oppRating: s.oppRating,
     oppTier: s.oppTier as EngineTier,
+    oppEngine: s.oppEngine as OpponentEngine | undefined,
     rated: s.rated,
     timeControl: { base: tc.base, inc: tc.inc },
     clocksMs: { w: clocks.w, b: clocks.b },

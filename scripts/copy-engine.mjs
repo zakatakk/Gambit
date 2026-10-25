@@ -54,3 +54,25 @@ if (nnue) {
   console.log('full nnue:', statSync(path.join(OUT, 'nn-5af11540bbfe.nnue')).size, 'bytes');
 }
 console.log('full js:', statSync(path.join(OUT, 'stockfish-nnue-16-single.js')).size, 'bytes');
+
+// Maia-3 5M: human-like policy model. The ONNX checkpoint ships inside the
+// maia3-js package; onnxruntime-web supplies the WASM inference runtime.
+const maiaModel = path.resolve('node_modules/maia3-js/models/maia3_5m.onnx');
+if (!existsSync(maiaModel)) {
+  console.error('Maia-3 model not found at', maiaModel, '- run npm install again');
+  process.exit(1);
+}
+copyFileSync(maiaModel, path.join(OUT, 'maia3_5m.onnx'));
+console.log('maia model:', statSync(path.join(OUT, 'maia3_5m.onnx')).size, 'bytes');
+
+const ortOut = path.join(OUT, 'ort');
+mkdirSync(ortOut, { recursive: true });
+for (const file of ['ort-wasm-simd-threaded.mjs', 'ort-wasm-simd-threaded.wasm']) {
+  const source = path.resolve('node_modules/onnxruntime-web/dist', file);
+  if (!existsSync(source)) {
+    console.error('ONNX Runtime file not found at', source, '- run npm install again');
+    process.exit(1);
+  }
+  copyFileSync(source, path.join(ortOut, file));
+  console.log('ort:', file, statSync(path.join(ortOut, file)).size, 'bytes');
+}

@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Offline-first chess PWA: Glicko-2 rating, adaptive assessment, CPU games at your level, rated puzzles.",
+  "description": "Offline-first chess PWA: Glicko-2 rating, Maia-3 human-like CPU, adaptive assessment, and rated puzzles.",
   "scripts": {
     "dev": "vite --host",
     "build": "tsc --noEmit && vite build",
@@ -18,7 +18,9 @@
     "deploy:gh": "npm run build && gh-pages -d dist -t true"
   },
   "dependencies": {
-    "chess.js": "^1.4.0"
+    "chess.js": "^1.4.0",
+    "maia3-js": "^0.2.0",
+    "onnxruntime-web": "^1.30.0"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
